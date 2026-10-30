@@ -16,11 +16,13 @@ jobs:
           script: |
             echo "::notice::token len=${#BIZON_TOKEN} hash=$(printf %s "$BIZON_TOKEN" | sha256sum | cut -c1-8)"
             B=https://online.bizon365.ru/api/v1
-            t() { r=$(curl -sS --max-time 20 "$@" 2>&1 | cut -c1-160); echo "::notice::$1 $2 => $r"; }
-            t -H "X-Token: $BIZON_TOKEN" "$B/webinars/subpages/getSubpages"
-            t -H "Authorization: Bearer $BIZON_TOKEN" "$B/webinars/subpages/getSubpages"
-            t -G --data-urlencode "token=$BIZON_TOKEN" "$B/webinars/subpages/getSubpages"
-            t -H "X-Token: $BIZON_TOKEN" "https://start.bizon365.ru/api/v1/webinars/subpages/getSubpages"
-            t -H "X-Token: $BIZON_TOKEN" "$B/webinars/reports/getlist?limit=3"
+            q() { curl -sS --max-time 20 -H "X-Token: $BIZON_TOKEN" "$B/$1"; }
+            q "webinars/reports/getlist?skip=0&limit=20" | python3 -c 'import sys,json
+            d=json.load(sys.stdin); print("::notice::reports count=%s" % d.get("count"))
+            for w in d.get("list",[]):
+                print("::notice::"+json.dumps({k:w.get(k) for k in ("name","text","type","created","webinarId","room")}, ensure_ascii=False)[:300])'
+            q "webinars/subpages/getSubpages" | python3 -c 'import sys,json
+            d=json.load(sys.stdin); print("::notice::subpages total=%s rooms=%s" % (d.get("total"), json.dumps(d.get("rooms"),ensure_ascii=False)[:300]))
+            for p in d.get("pages",[]): print("::notice::page "+json.dumps(p,ensure_ascii=False)[:300])'
         env:
           BIZON_TOKEN: ${{ secrets.BIZON_TOKEN }}
