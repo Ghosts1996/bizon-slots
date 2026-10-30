@@ -15,15 +15,11 @@ jobs:
           envs: BIZON_TOKEN
           script: |
             B=https://online.bizon365.ru/api/v1
-            q() { curl -sS --max-time 20 -H "X-Token: $BIZON_TOKEN" "$B/$1"; }
-            echo "::notice::token length: ${#BIZON_TOKEN}"
-            sp=$(q webinars/subpages/getSubpages)
-            echo "::notice::subpages: $(echo "$sp" | python3 -c 'import sys,json
-            d=json.load(sys.stdin)
-            for p in d.get("pages",d.get("list",[])) if isinstance(d,dict) else d:
-                print({k:p.get(k) for k in ("name","title","pageId","id","url","webinarId","room")}, end=" | ")' 2>&1 | cut -c1-900)"
-            echo "::notice::subpages raw: $(echo "$sp" | cut -c1-600)"
-            wl=$(q "webinars/reports/getlist?skip=0&limit=5")
-            echo "::notice::reports: $(echo "$wl" | cut -c1-700)"
+            t() { r=$(curl -sS --max-time 20 "$@" 2>&1 | cut -c1-160); echo "::notice::$1 $2 => $r"; }
+            t -H "X-Token: $BIZON_TOKEN" "$B/webinars/subpages/getSubpages"
+            t -H "Authorization: Bearer $BIZON_TOKEN" "$B/webinars/subpages/getSubpages"
+            t -G --data-urlencode "token=$BIZON_TOKEN" "$B/webinars/subpages/getSubpages"
+            t -H "X-Token: $BIZON_TOKEN" "https://start.bizon365.ru/api/v1/webinars/subpages/getSubpages"
+            t -H "X-Token: $BIZON_TOKEN" "$B/webinars/reports/getlist?limit=3"
         env:
           BIZON_TOKEN: ${{ secrets.BIZON_TOKEN }}
