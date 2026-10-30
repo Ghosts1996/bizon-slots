@@ -14,6 +14,7 @@ jobs:
           password: ${{ secrets.VDS_PASSWORD }}
           envs: BIZON_TOKEN
           script: |
+            echo "::notice::token len=${#BIZON_TOKEN} hash=$(printf %s "$BIZON_TOKEN" | sha256sum | cut -c1-8)"
             B=https://online.bizon365.ru/api/v1
             t() { r=$(curl -sS --max-time 20 "$@" 2>&1 | cut -c1-160); echo "::notice::$1 $2 => $r"; }
             t -H "X-Token: $BIZON_TOKEN" "$B/webinars/subpages/getSubpages"
