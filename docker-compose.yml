@@ -1,9 +1,0 @@
-services:
-  slots:
-    build: .
-    container_name: bizon-slots
-    restart: unless-stopped
-    environment:
-      - SLOTS=${SLOTS:-14,16,19,21}
-    ports:
-      - "8088:8088"

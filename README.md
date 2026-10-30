@@ -11,5 +11,5 @@
 - `GET /health`
 
 ## Деплой
-Push в `main` → тесты → копирование на VDS → `docker compose up -d --build`.
+Push в `main` → тесты → копирование на VDS в `/opt/bizon-slots` → venv + systemd-сервис `bizon-slots`.
 Секреты репозитория: `VDS_HOST`, `VDS_USER`, `VDS_PASSWORD`. Порт 8088.
