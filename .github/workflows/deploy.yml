@@ -37,14 +37,28 @@ jobs:
           host: ${{ secrets.VDS_HOST }}
           username: ${{ secrets.VDS_USER }}
           password: ${{ secrets.VDS_PASSWORD }}
+          command_timeout: 20m
           script: |
-            set -e
+            err() { echo "::error::$*"; }
+            trap 'err "deploy failed at line $LINENO"' ERR
+            set -eE
+            export DEBIAN_FRONTEND=noninteractive
+            command -v curl >/dev/null || { apt-get update -qq && apt-get install -y -qq curl; }
             if ! command -v docker >/dev/null 2>&1; then
-              curl -fsSL https://get.docker.com | sh
+              echo "installing docker"
+              curl -fsSL https://get.docker.com | sh >/tmp/docker-install.log 2>&1 || { err "docker install: $(tail -5 /tmp/docker-install.log | tr '\n' ' ')"; exit 1; }
+            fi
+            systemctl start docker 2>/dev/null || true
+            if docker compose version >/dev/null 2>&1; then DC="docker compose"
+            elif command -v docker-compose >/dev/null 2>&1; then DC="docker-compose"
+            else apt-get install -y -qq docker-compose-plugin >/dev/null 2>&1 && DC="docker compose" || { err "no docker compose"; exit 1; }
+            fi
+            if ss -ltnp 2>/dev/null | grep -q ':8088 ' && ! docker ps --format '{{.Names}}' | grep -q '^bizon-slots$'; then
+              err "port 8088 busy: $(ss -ltnp | grep ':8088 ')"; exit 1
             fi
             cd /opt/bizon-slots
-            docker compose up -d --build
-            sleep 5
-            curl -fsS http://127.0.0.1:8088/health
-            echo
-            curl -fsS http://127.0.0.1:8088/slots
+            $DC up -d --build >/tmp/bizon-build.log 2>&1 || { err "build: $(tail -8 /tmp/bizon-build.log | tr '\n' ' ')"; exit 1; }
+            for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8088/health >/dev/null 2>&1 && break; sleep 2; done
+            curl -fsS http://127.0.0.1:8088/health >/dev/null || { err "not healthy: $(docker logs --tail 15 bizon-slots 2>&1 | tr '\n' ' ')"; exit 1; }
+            IP=$(curl -fsS -4 https://ifconfig.me 2>/dev/null || hostname -I | cut -d' ' -f1)
+            echo "::notice::OK http://$IP:8088/slots -> $(curl -fsS http://127.0.0.1:8088/slots | cut -c1-200)"
