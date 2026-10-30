@@ -16,6 +16,7 @@ jobs:
           script: |
             B=https://online.bizon365.ru/api/v1
             q() { curl -sS --max-time 20 -H "X-Token: $BIZON_TOKEN" "$B/$1"; }
+            echo "::notice::token length: ${#BIZON_TOKEN}"
             sp=$(q webinars/subpages/getSubpages)
             echo "::notice::subpages: $(echo "$sp" | python3 -c 'import sys,json
             d=json.load(sys.stdin)
