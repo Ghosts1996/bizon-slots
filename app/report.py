@@ -377,7 +377,7 @@ def process(updates: list, con) -> list:
         text, chat = (m.get("text") or "").strip(), m.get("chat") or {}
         if not chat:
             continue
-        cid, name = str(chat["id"]), chat.get("first_name") or chat.get("title") or ""
+        cid, name = str(chat["id"]), ""
         parts = text.split()
         role = parts[1] if text.startswith("/start") and len(parts) > 1 else ""
         if role in ("report", "alert"):
@@ -399,10 +399,9 @@ def answer(todo: list) -> None:
     for kind, arg in todo:
         try:
             if kind == "welcome":
-                cid, role, name = arg
-                hello = f"Здравствуйте, {html.escape(name)}! " if name else ""
+                cid, role, _ = arg
                 extra = "\n🔔 Также сообщу, если что-то сломается." if role == "alert" else ""
-                tg_send(cid, f"✅ <b>{hello}Вы подписаны на отчёты.</b>{extra}\n\n{HELP}", MENU)
+                tg_send(cid, f"✅ <b>Вы подписаны на отчёты.</b>{extra}\n\n{HELP}", MENU)
                 y = datetime.now(MSK) - timedelta(days=1)
                 tg_send(cid, *day_view(y))
             elif kind == "bye":
