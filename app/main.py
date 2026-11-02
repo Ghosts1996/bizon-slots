@@ -72,8 +72,8 @@ def resolve(text: str, now: datetime) -> dict:
     r = _resolve(text, now)
     r["msg"] = MSG_OK.format(text=r["text"]) if r.get("valid") else MSG_BAD
     for k in ("text", "date", "time", "ts", "time_utc", "seconds_left",
-              "remind_60", "delay_60", "delay_7", "delay_5", "room_url"):
-        r.setdefault(k, "" if k in ("text", "date", "time", "time_utc", "room_url") else 0)
+              "remind_60", "delay_60", "delay_7", "delay_5", "delay_gap", "remind_head", "room_url"):
+        r.setdefault(k, "" if k in ("text", "date", "time", "time_utc", "room_url", "remind_head") else 0)
     return r
 
 
@@ -99,6 +99,10 @@ def _resolve(text: str, now: datetime) -> dict:
         "delay_60": max(seconds_left - 3600, 0),
         "delay_7": max(seconds_left - 420, 0),
         "delay_5": max(seconds_left - 300, 0),
+        # пауза между напоминанием и ссылкой: напоминание уходит через delay_60,
+        # ссылка — через delay_5 от записи, значит после напоминания ждём разницу
+        "delay_gap": max(seconds_left - 300, 0) - max(seconds_left - 3600, 0),
+        "remind_head": "Через час встречаемся!" if seconds_left > 3600 else "Совсем скоро начинаем!",
         "room_url": room,
     }
 

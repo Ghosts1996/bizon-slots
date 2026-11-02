@@ -64,3 +64,12 @@ def test_resolve_msg_fields():
     assert ok["valid"] == 1 and "вы записаны" in ok["msg"] and ok["room_url"]
     bad = resolve("ерунда", t(22))
     assert bad["valid"] == 0 and bad["msg"] and bad["delay_7"] == 0
+
+
+def test_gap_everyone_gets_both():
+    early = resolve("Сегодня 21:00 по МСК", t(17, 15))
+    assert early["delay_60"] + early["delay_gap"] == early["delay_5"] and early["delay_gap"] == 3300
+    late = resolve("Сегодня 21:00 по МСК", t(20, 50))
+    assert late["delay_60"] == 0 and late["delay_gap"] == 300 and late["remind_head"].startswith("Совсем")
+    last = resolve("Сегодня 21:00 по МСК", t(20, 58))
+    assert last["delay_gap"] == 0
