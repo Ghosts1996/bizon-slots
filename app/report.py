@@ -8,7 +8,7 @@
 
 python -m app.report daily [--dry]   — отчёт за вчера (по понедельникам + неделя)
 python -m app.report watchdog        — проверка токена Бизона
-python -m app.report poll            — обработать сообщения бота
+python -m app.report serve           — бот: подписки, меню и кнопки (постоянно)
 python -m app.report test            — тестовое сообщение подписчикам
 python -m app.report links           — ссылки для подписки
 """
@@ -33,8 +33,8 @@ SEG = [("full", "🟢", "досмотрели до конца"),
 WEEKDAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля",
           "августа", "сентября", "октября", "ноября", "декабря"]
-LINKS = [("📈 Отчёты Бизона", "https://start.bizon365.ru/admin/reports"),
-         ("🤖 Сейлбот", "https://salebot.pro/projects")]
+LINKS = [("🎥 Открыть Бизон", "https://start.bizon365.ru/"),
+         ("🤖 Открыть Сейлбот", "https://salebot.pro/")]
 
 
 # --- Сбор цифр ----------------------------------------------------------------
@@ -189,22 +189,57 @@ def plain(text: str) -> str:
 
 # --- Доставка -----------------------------------------------------------------
 
-def tg(method: str, **params) -> dict:
+def tg(method: str, _http_timeout: int = 30, **params) -> dict:
     token = os.getenv("TG_TOKEN", "")
     if not token:
         raise RuntimeError("TG_TOKEN не задан")
     data = urllib.parse.urlencode(params).encode()
     req = urllib.request.Request(f"https://api.telegram.org/bot{token}/{method}", data=data)
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(req, timeout=_http_timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
-def tg_send(chat_id: str, text: str, buttons: bool = True) -> None:
+# Постоянное меню внизу чата — чтобы не вспоминать команды
+BTN_TODAY, BTN_YESTERDAY, BTN_WEEK, BTN_HELP = "📊 Сегодня", "🗓 Вчера", "📈 Неделя", "ℹ️ Помощь"
+MENU = {"keyboard": [[{"text": BTN_TODAY}, {"text": BTN_YESTERDAY}],
+                     [{"text": BTN_WEEK}, {"text": BTN_HELP}]],
+        "resize_keyboard": True, "is_persistent": True,
+        "input_field_placeholder": "Выберите отчёт 👇"}
+
+
+def links_row() -> list:
+    return [{"text": t, "url": u} for t, u in LINKS]
+
+
+def day_keyboard(day: datetime) -> dict:
+    """Под дневным отчётом: листать дни, обновить, перейти к неделе, ссылки."""
+    today = datetime.now(MSK).date()
+    prev_d, next_d = day - timedelta(days=1), day + timedelta(days=1)
+    nav = [{"text": f"◀️ {prev_d:%d.%m}", "callback_data": f"d:{prev_d:%Y-%m-%d}"}]
+    if day.date() == today:
+        nav.append({"text": "🔄 Обновить", "callback_data": f"d:{day:%Y-%m-%d}"})
+    else:
+        nav.append({"text": f"{next_d:%d.%m} ▶️", "callback_data": f"d:{next_d:%Y-%m-%d}"})
+    return {"inline_keyboard": [nav,
+                                [{"text": "📈 Итоги недели", "callback_data": f"w:{day:%Y-%m-%d}"}],
+                                links_row()]}
+
+
+def week_keyboard(end: datetime) -> dict:
+    prev_e, next_e = end - timedelta(days=7), end + timedelta(days=7)
+    nav = [{"text": "◀️ Пред. неделя", "callback_data": f"w:{prev_e:%Y-%m-%d}"}]
+    if next_e.date() < datetime.now(MSK).date():
+        nav.append({"text": "След. неделя ▶️", "callback_data": f"w:{next_e:%Y-%m-%d}"})
+    return {"inline_keyboard": [nav,
+                                [{"text": "📊 Отчёт за день", "callback_data": f"d:{end:%Y-%m-%d}"}],
+                                links_row()]}
+
+
+def tg_send(chat_id: str, text: str, markup: dict | None = None) -> None:
     params = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
               "disable_web_page_preview": "true"}
-    if buttons:
-        params["reply_markup"] = json.dumps(
-            {"inline_keyboard": [[{"text": t, "url": u} for t, u in LINKS]]})
+    if markup:
+        params["reply_markup"] = json.dumps(markup)
     tg("sendMessage", **params)
 
 
@@ -233,17 +268,13 @@ def recipients(role: str) -> list:
         return [r[0] for r in con.execute(q, roles)]
 
 
-def notify(role: str, subject: str, body_html: str) -> int:
+def notify(role: str, subject: str, body_html: str, markup: dict | None = None) -> int:
     """role: report — всем подписчикам; alert — только подписанным на тревоги."""
     sent = 0
     if os.getenv("TG_TOKEN"):
-        try:
-            poll()
-        except Exception:
-            pass
         for cid in recipients(role):
             try:
-                tg_send(cid, body_html, buttons=(role == "report"))
+                tg_send(cid, body_html, markup)
                 sent += 1
             except Exception:
                 pass
@@ -254,85 +285,168 @@ def notify(role: str, subject: str, body_html: str) -> int:
     return sent
 
 
-# --- Бот: подписка и команды --------------------------------------------------
+# --- Бот: подписка, меню и кнопки ---------------------------------------------
 
-HELP = ("<b>Бот отчётов автовебинара</b>\n\n"
-        "Каждое утро в 9:00 я присылаю итоги за вчера, по понедельникам — итоги недели.\n\n"
-        "/today — цифры за сегодня (на текущий момент)\n"
-        "/yesterday — итоги за вчера\n"
-        "/week — итоги за 7 дней\n"
-        "/stop — отписаться")
+HELP = ("<b>👋 Бот отчётов автовебинара</b>\n\n"
+        "🕘 Каждое утро в 9:00 присылаю итоги за вчера.\n"
+        "📅 По понедельникам — итоги прошлой недели.\n\n"
+        "<b>Кнопки внизу:</b>\n"
+        f"{BTN_TODAY} — цифры на текущий момент\n"
+        f"{BTN_YESTERDAY} — итоги за вчера\n"
+        f"{BTN_WEEK} — итоги за 7 дней\n\n"
+        "Под отчётами можно листать дни ◀️ ▶️ и сразу открыть Бизон или Сейлбот.\n\n"
+        "Отписаться — /stop")
 
 
-def handle_command(cid: str, text: str) -> None:
+def day_view(day: datetime) -> tuple:
     now = datetime.now(MSK)
-    if text.startswith("/today"):
-        tg_send(cid, render_day(day_stats(now), None, f"📊 Сегодня, {human_day(now)} (на {now:%H:%M})"))
-    elif text.startswith("/yesterday"):
-        y = now - timedelta(days=1)
-        tg_send(cid, render_day(day_stats(y), day_stats(y - timedelta(days=1), False),
-                                f"📊 Итоги за {human_day(y)}"))
-    elif text.startswith("/week"):
-        tg_send(cid, render_week(now - timedelta(days=1)))
-    elif text.startswith("/help"):
-        tg_send(cid, HELP, buttons=False)
+    if day.date() == now.date():
+        title = f"📊 Сегодня, {human_day(day)} · на {now:%H:%M}"
+        return render_day(day_stats(day), None, title), day_keyboard(day)
+    title = f"📊 Итоги за {human_day(day)}"
+    prev = day_stats(day - timedelta(days=1), with_room=False)
+    return render_day(day_stats(day), prev, title), day_keyboard(day)
 
 
-def poll() -> None:
-    """Забирает новые сообщения бота: подписки по /start report|alert и команды."""
+def week_view(end: datetime) -> tuple:
+    return render_week(end), week_keyboard(end)
+
+
+def parse_day(s: str) -> datetime:
+    d = datetime.strptime(s, "%Y-%m-%d")
+    return datetime(d.year, d.month, d.day, 12, tzinfo=MSK)
+
+
+def handle_text(cid: str, text: str) -> None:
+    now = datetime.now(MSK)
+    if text in (BTN_TODAY, "/today"):
+        tg_send(cid, *day_view(now))
+    elif text in (BTN_YESTERDAY, "/yesterday"):
+        tg_send(cid, *day_view(now - timedelta(days=1)))
+    elif text in (BTN_WEEK, "/week"):
+        tg_send(cid, *week_view(now - timedelta(days=1)))
+    else:
+        tg_send(cid, HELP, MENU)
+
+
+def handle_callback(q: dict) -> None:
+    data, msg = q.get("data") or "", q.get("message") or {}
+    cid, mid = str(msg.get("chat", {}).get("id")), msg.get("message_id")
+    try:
+        kind, arg = data.split(":", 1)
+        day = parse_day(arg)
+        if day.date() > datetime.now(MSK).date():
+            tg("answerCallbackQuery", callback_query_id=q["id"], text="Этот день ещё не наступил")
+            return
+        text, markup = day_view(day) if kind == "d" else week_view(day)
+        tg("answerCallbackQuery", callback_query_id=q["id"], text="⏳ Обновляю…")
+        try:
+            tg("editMessageText", chat_id=cid, message_id=mid, text=text, parse_mode="HTML",
+               disable_web_page_preview="true", reply_markup=json.dumps(markup))
+        except Exception:
+            pass  # «message is not modified» — цифры не изменились
+    except Exception:
+        tg("answerCallbackQuery", callback_query_id=q["id"], text="Не получилось, попробуйте ещё раз")
+
+
+def setup_bot() -> None:
+    tg("setMyCommands", commands=json.dumps([
+        {"command": "today", "description": "📊 Цифры за сегодня"},
+        {"command": "yesterday", "description": "🗓 Итоги за вчера"},
+        {"command": "week", "description": "📈 Итоги за неделю"},
+        {"command": "help", "description": "ℹ️ Что умеет бот"},
+        {"command": "stop", "description": "Отписаться"}]))
+    tg("setMyShortDescription",
+       short_description="Ежедневные отчёты по автовебинару: записи, доходимость, досмотры.")
+    tg("setMyDescription", description=(
+        "Присылаю итоги автовебинара каждое утро: сколько записалось, пришло и досмотрело. "
+        "Подписка — по персональной ссылке."))
+
+
+def process(updates: list, con) -> list:
+    """Разбирает пачку обновлений: подписки и действия. Возвращает задачи на ответ."""
+    subs = {r[0] for r in con.execute("select chat_id from tg_subs")}
+    todo = []
+    for u in updates:
+        if u.get("callback_query"):
+            q = u["callback_query"]
+            if str(q.get("message", {}).get("chat", {}).get("id")) in subs:
+                todo.append(("cb", q))
+            continue
+        m = u.get("message") or {}
+        text, chat = (m.get("text") or "").strip(), m.get("chat") or {}
+        if not chat:
+            continue
+        cid, name = str(chat["id"]), chat.get("first_name") or chat.get("title") or ""
+        parts = text.split()
+        role = parts[1] if text.startswith("/start") and len(parts) > 1 else ""
+        if role in ("report", "alert"):
+            con.execute("insert or replace into tg_subs values (?, ?, ?)", (cid, role, name))
+            subs.add(cid)
+            todo.append(("welcome", (cid, role, name)))
+        elif text.startswith("/stop"):
+            con.execute("delete from tg_subs where chat_id = ?", (cid,))
+            subs.discard(cid)
+            todo.append(("bye", cid))
+        elif cid in subs:
+            todo.append(("text", (cid, text)))
+        else:
+            todo.append(("stranger", cid))
+    return todo
+
+
+def answer(todo: list) -> None:
+    for kind, arg in todo:
+        try:
+            if kind == "welcome":
+                cid, role, name = arg
+                hello = f"Здравствуйте, {html.escape(name)}! " if name else ""
+                extra = "\n🔔 Также сообщу, если что-то сломается." if role == "alert" else ""
+                tg_send(cid, f"✅ <b>{hello}Вы подписаны на отчёты.</b>{extra}\n\n{HELP}", MENU)
+                y = datetime.now(MSK) - timedelta(days=1)
+                tg_send(cid, *day_view(y))
+            elif kind == "bye":
+                tg_send(arg, "Вы отписались 👋 Чтобы вернуться — откройте ссылку подписки ещё раз.",
+                        {"remove_keyboard": True})
+            elif kind == "stranger":
+                tg_send(arg, "🔒 Это служебный бот отчётов. Для подписки используйте ссылку, "
+                             "которую вам прислали.")
+            elif kind == "cb":
+                handle_callback(arg)
+            else:
+                handle_text(*arg)
+        except Exception:
+            pass
+
+
+def poll(wait: int = 0) -> None:
+    """Одна итерация: забрать обновления (wait — long polling, сек) и ответить."""
     with db() as con:
         subs_table(con)
         row = con.execute("select v from kv where k = 'tg_offset'").fetchone()
         offset = int(row[0]) if row else 0
-        if not con.execute("select 1 from kv where k = 'tg_cmds'").fetchone():
-            tg("setMyCommands", commands=json.dumps([
-                {"command": "today", "description": "Цифры за сегодня"},
-                {"command": "yesterday", "description": "Итоги за вчера"},
-                {"command": "week", "description": "Итоги за неделю"},
-                {"command": "help", "description": "Что умеет бот"},
-                {"command": "stop", "description": "Отписаться"}]))
-            con.execute("insert or replace into kv values ('tg_cmds', '1')")
-        updates = tg("getUpdates", offset=offset, timeout=0).get("result", [])
-        subs = {r[0] for r in con.execute("select chat_id from tg_subs")}
-        todo = []
-        for u in updates:
-            offset = max(offset, u["update_id"] + 1)
-            m = u.get("message") or {}
-            text, chat = (m.get("text") or "").strip(), m.get("chat") or {}
-            if not chat:
-                continue
-            cid, name = str(chat["id"]), chat.get("first_name") or chat.get("title") or ""
-            parts = text.split()
-            role = parts[1] if text.startswith("/start") and len(parts) > 1 else ""
-            if role in ("report", "alert"):
-                con.execute("insert or replace into tg_subs values (?, ?, ?)", (cid, role, name))
-                subs.add(cid)
-                todo.append((cid, "welcome", role))
-            elif text.startswith("/stop"):
-                con.execute("delete from tg_subs where chat_id = ?", (cid,))
-                subs.discard(cid)
-                todo.append((cid, "bye", ""))
-            elif cid in subs and text.startswith("/"):
-                todo.append((cid, "cmd", text))
-            elif text.startswith("/start"):
-                todo.append((cid, "stranger", ""))
-        con.execute("insert or replace into kv values ('tg_offset', ?)", (str(offset),))
-    for cid, kind, arg in todo:  # отвечаем после записи offset — не будет повторов
+        if not con.execute("select 1 from kv where k = 'tg_setup_v2'").fetchone():
+            setup_bot()
+            con.execute("insert or replace into kv values ('tg_setup_v2', '1')")
+    updates = tg("getUpdates", _http_timeout=wait + 15, offset=offset, timeout=wait,
+                 allowed_updates=json.dumps(["message", "callback_query"])).get("result", [])
+    if not updates:
+        return
+    with db() as con:
+        subs_table(con)
+        todo = process(updates, con)
+        new_offset = max(u["update_id"] for u in updates) + 1
+        con.execute("insert or replace into kv values ('tg_offset', ?)", (str(new_offset),))
+    answer(todo)  # отвечаем после сохранения offset — без повторов при сбое
+
+
+def serve() -> None:
+    """Постоянная работа бота: кнопки отвечают мгновенно."""
+    while True:
         try:
-            if kind == "welcome":
-                extra = "\n\n🔔 Также буду сообщать о сбоях." if arg == "alert" else ""
-                tg_send(cid, "✅ <b>Вы подписаны на отчёты автовебинара.</b>" + extra + "\n\n" + HELP,
-                        buttons=False)
-            elif kind == "bye":
-                tg_send(cid, "Вы отписались. Чтобы вернуться — откройте ссылку подписки ещё раз.",
-                        buttons=False)
-            elif kind == "stranger":
-                tg_send(cid, "Это служебный бот отчётов. Для подписки используйте ссылку, "
-                             "которую вам прислали.", buttons=False)
-            else:
-                handle_command(cid, arg)
+            poll(wait=25)
         except Exception:
-            pass
+            time.sleep(5)
 
 
 # --- Задачи по расписанию ------------------------------------------------------
@@ -347,9 +461,9 @@ def daily(dry: bool) -> None:
         if week:
             print("\n" + plain(week))
         return
-    notify("report", f"Автовебинар: итоги за {y:%d.%m}", text)
+    notify("report", f"Автовебинар: итоги за {y:%d.%m}", text, day_keyboard(y))
     if week:
-        notify("report", "Автовебинар: итоги недели", week)
+        notify("report", "Автовебинар: итоги недели", week, week_keyboard(y))
 
 
 def watchdog() -> None:
@@ -381,9 +495,11 @@ if __name__ == "__main__":
         daily("--dry" in sys.argv)
     elif cmd == "watchdog":
         watchdog()
-    elif cmd == "poll":
+    elif cmd == "serve":
         if os.getenv("TG_TOKEN"):
-            poll()
+            serve()
+        else:
+            time.sleep(3600)  # без токена просто ждём; systemd перезапустит после деплоя
     elif cmd == "test":
         print("sent=%d" % notify("report", "Проверка связи",
                                  "🔔 <b>Проверка связи</b>\nОтчёты автовебинара будут приходить сюда."))

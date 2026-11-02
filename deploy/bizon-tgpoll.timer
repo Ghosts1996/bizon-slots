@@ -1,9 +1,0 @@
-[Unit]
-Description=bizon-slots: проверять подписки раз в минуту
-
-[Timer]
-OnCalendar=*:*:00
-Persistent=false
-
-[Install]
-WantedBy=timers.target

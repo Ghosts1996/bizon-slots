@@ -73,12 +73,14 @@ jobs:
               printf 'REPORT_TO=%s\nALERT_TO=%s\n' "$REPORT_TO" "$ALERT_TO"
             } > /opt/bizon-slots/.env
             umask 022
-            cp deploy/bizon-report.service deploy/bizon-report.timer deploy/bizon-watchdog.service deploy/bizon-watchdog.timer deploy/bizon-tgpoll.service deploy/bizon-tgpoll.timer /etc/systemd/system/
+            cp deploy/bizon-report.service deploy/bizon-report.timer deploy/bizon-watchdog.service deploy/bizon-watchdog.timer deploy/bizon-tgbot.service /etc/systemd/system/
             cp deploy/bizon-slots.service /etc/systemd/system/bizon-slots.service
             systemctl daemon-reload
             systemctl enable -q bizon-slots
             systemctl restart bizon-slots
-            systemctl enable -q --now bizon-report.timer bizon-watchdog.timer bizon-tgpoll.timer
+            systemctl disable -q --now bizon-tgpoll.timer 2>/dev/null || true
+            systemctl enable -q --now bizon-report.timer bizon-watchdog.timer
+            systemctl enable -q bizon-tgbot && systemctl restart bizon-tgbot
             for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8088/health >/dev/null 2>&1 && break; sleep 1; done
             curl -fsS http://127.0.0.1:8088/health >/dev/null || { err "not healthy: $(journalctl -u bizon-slots -n 15 --no-pager 2>&1 | tr '\n' ' ')"; exit 1; }
             if command -v ufw >/dev/null && ufw status | grep -q active; then ufw allow 8088/tcp >/dev/null; fi

@@ -1,0 +1,13 @@
+[Unit]
+Description=bizon-slots: Telegram-бот отчётов
+After=network-online.target
+
+[Service]
+WorkingDirectory=/opt/bizon-slots
+EnvironmentFile=-/opt/bizon-slots/.env
+ExecStart=/opt/bizon-slots/venv/bin/python -m app.report serve
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

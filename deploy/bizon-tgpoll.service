@@ -1,8 +1,0 @@
-[Unit]
-Description=bizon-slots: подписки в Telegram-боте
-
-[Service]
-Type=oneshot
-WorkingDirectory=/opt/bizon-slots
-EnvironmentFile=-/opt/bizon-slots/.env
-ExecStart=/opt/bizon-slots/venv/bin/python -m app.report poll
