@@ -72,7 +72,7 @@ def resolve(text: str, now: datetime) -> dict:
     r = _resolve(text, now)
     r["msg"] = MSG_OK.format(text=r["text"]) if r.get("valid") else MSG_BAD
     for k in ("text", "date", "time", "ts", "time_utc", "seconds_left",
-              "remind_60", "delay_60", "delay_7", "room_url"):
+              "remind_60", "delay_60", "delay_7", "delay_5", "room_url"):
         r.setdefault(k, "" if k in ("text", "date", "time", "time_utc", "room_url") else 0)
     return r
 
@@ -98,6 +98,7 @@ def _resolve(text: str, now: datetime) -> dict:
         "remind_60": int(seconds_left > 3600),
         "delay_60": max(seconds_left - 3600, 0),
         "delay_7": max(seconds_left - 420, 0),
+        "delay_5": max(seconds_left - 300, 0),
         "room_url": room,
     }
 
