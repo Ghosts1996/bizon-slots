@@ -85,9 +85,7 @@ jobs:
             curl -fsS http://127.0.0.1:8088/health >/dev/null || { err "not healthy: $(journalctl -u bizon-slots -n 15 --no-pager 2>&1 | tr '\n' ' ')"; exit 1; }
             if command -v ufw >/dev/null && ufw status | grep -q active; then ufw allow 8088/tcp >/dev/null; fi
             IP=$(curl -fsS -4 --max-time 5 https://ifconfig.me 2>/dev/null || hostname -I | cut -d' ' -f1)
-            R=$(curl -fsS -G http://127.0.0.1:8088/resolve --data-urlencode 'text=Завтра 21:00 по МСК' --data-urlencode client_id=deploytest | cut -c1-60)
-            echo "::notice::resolve+save $R"
-            echo "::notice::due-early $(curl -fsS 'http://127.0.0.1:8088/due?client_id=deploytest&step=hour')"
+            sqlite3 /opt/bizon-slots/data.db "delete from reg where client_id='deploytest'; delete from reg_log where client_id='deploytest';" 2>/dev/null || venv/bin/python -c "import sqlite3;c=sqlite3.connect('/opt/bizon-slots/data.db');c.execute(\"delete from reg where client_id='deploytest'\");c.execute(\"delete from reg_log where client_id='deploytest'\");c.commit()" 2>/dev/null || true
             echo "::notice::report-preview $(cd /opt/bizon-slots && set -a && . ./.env && set +a && venv/bin/python -m app.report daily --dry 2>&1 | tr '\n' '|' | cut -c1-600)"
             if grep -q '^TG_TOKEN=.' .env; then
               echo "::notice::tg-links $(set -a; . ./.env; set +a; venv/bin/python -m app.report links 2>&1 | tail -1)"
