@@ -37,6 +37,7 @@ jobs:
           host: ${{ secrets.VDS_HOST }}
           username: ${{ secrets.VDS_USER }}
           password: ${{ secrets.VDS_PASSWORD }}
+          envs: BIZON_TOKEN
           command_timeout: 20m
           script: |
             err() { echo "::error::$*"; }
@@ -54,6 +55,7 @@ jobs:
             [ -x venv/bin/pip ] || python3 -m venv venv
             venv/bin/pip install -q --upgrade pip >/tmp/bizon-pip.log 2>&1 || true
             venv/bin/pip install -q -r requirements.txt >>/tmp/bizon-pip.log 2>&1 || { err "pip: $(tail -6 /tmp/bizon-pip.log | tr '\n' ' ')"; exit 1; }
+            umask 077; printf 'BIZON_TOKEN=%s\n' "$BIZON_TOKEN" > /opt/bizon-slots/.env; umask 022
             cp deploy/bizon-slots.service /etc/systemd/system/bizon-slots.service
             systemctl daemon-reload
             systemctl enable -q bizon-slots
@@ -62,4 +64,7 @@ jobs:
             curl -fsS http://127.0.0.1:8088/health >/dev/null || { err "not healthy: $(journalctl -u bizon-slots -n 15 --no-pager 2>&1 | tr '\n' ' ')"; exit 1; }
             if command -v ufw >/dev/null && ufw status | grep -q active; then ufw allow 8088/tcp >/dev/null; fi
             IP=$(curl -fsS -4 --max-time 5 https://ifconfig.me 2>/dev/null || hostname -I | cut -d' ' -f1)
+            echo "::notice::visited-test $(curl -fsS 'http://127.0.0.1:8088/visited?client_id=test&ts=1793617200')"
             echo "::notice::OK http://$IP:8088/slots -> $(curl -fsS http://127.0.0.1:8088/slots | cut -c1-200)"
+        env:
+          BIZON_TOKEN: ${{ secrets.BIZON_TOKEN }}

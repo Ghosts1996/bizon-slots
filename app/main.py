@@ -3,8 +3,11 @@
 Расписание фиксированное (по МСК), слоты задаются в env SLOTS="14,16,19,21".
 Слот исчезает строго в момент старта: в 12:00:01 слот 12:00 уже не отдаётся.
 """
+import json
 import os
 import re
+import urllib.parse
+import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, Query
@@ -130,3 +133,51 @@ def resolve_endpoint(text: str = Query(None, description="Текст нажат�
     if ts:
         return resolve_ts(ts, now)
     return resolve(text or "", now)
+
+
+# --- Посещаемость: отчёт Бизона по конкретному сеансу -----------------------
+
+BIZON_API = "https://online.bizon365.ru/api/v1"
+ROOM_ID = os.getenv("ROOM_ID", "209601:avtoweb")
+
+
+def bizon_get(path: str, params: dict) -> dict:
+    token = os.getenv("BIZON_TOKEN", "")
+    url = f"{BIZON_API}/{path}?{urllib.parse.urlencode(params)}"
+    req = urllib.request.Request(url, headers={"X-Token": token})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def session_viewers(webinar_id: str) -> list:
+    viewers, skip = [], 0
+    while True:
+        d = bizon_get("webinars/reports/getviewers",
+                      {"webinarId": webinar_id, "skip": skip, "limit": 1000})
+        chunk = d.get("viewers") or []
+        viewers += chunk
+        skip += len(chunk)
+        if not chunk or skip >= int(d.get("total") or 0):
+            return viewers
+
+
+def check_visit(client_id: str, ts: int) -> dict:
+    start = datetime.fromtimestamp(int(ts), MSK)
+    webinar_id = f"{ROOM_ID}*{start:%Y-%m-%dT%H:%M:00}"
+    try:
+        lst = bizon_get("webinars/reports/getlist", {"skip": 0, "limit": 50, "type": "AutoWebinars"})
+        ready = any(w.get("webinarId") == webinar_id for w in lst.get("list") or [])
+        if not ready:
+            return {"ready": 0, "visited": 0, "webinar_id": webinar_id}
+        needle = f"salebot={client_id}"
+        hit = [v for v in session_viewers(webinar_id)
+               if needle in json.dumps(v, ensure_ascii=False)
+               or str(v.get("salebot") or "") == str(client_id)]
+        return {"ready": 1, "visited": int(bool(hit)), "webinar_id": webinar_id}
+    except Exception as e:  # сеть/токен — бот получит ready=0 и проверит позже
+        return {"ready": 0, "visited": 0, "webinar_id": webinar_id, "error": str(e)[:200]}
+
+
+@app.get("/visited")
+def visited_endpoint(client_id: str = Query(...), ts: int = Query(...)):
+    return check_visit(client_id, ts)
