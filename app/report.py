@@ -23,7 +23,7 @@ import urllib.request
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 
-from app.main import MSK, ROOM_ID, SLOTS, at, bizon_get, db, session_viewers
+from app.main import MSK, ROOM_ID, SLOTS, at, bizon_get, db, segment, session_viewers, watched_minutes
 
 STATE_DIR = os.getenv("STATE_DIR", "/opt/bizon-slots")
 WEBINAR_TITLE = os.getenv("WEBINAR_TITLE", "Как происходит развитие ребёнка")
@@ -47,6 +47,26 @@ def registered_for(con, ts: int) -> set:
     return {cid for cid, t in last.items() if t == ts}
 
 
+def sync_visits(con, start: datetime, ts: int, regs: set) -> None:
+    """Сверяет записавшихся с отчётом Бизона сразу после эфира — не ждём проверки из бота."""
+    known = {r[0] for r in con.execute("select client_id from visits where ts = ?", (ts,))}
+    todo = regs - known
+    if not todo:
+        return
+    try:
+        viewers = session_viewers(f"{ROOM_ID}*{start:%Y-%m-%dT%H:%M:00}")
+    except Exception:
+        return
+    if not viewers:
+        return  # отчёт ещё не готов
+    blobs = [(json.dumps(v, ensure_ascii=False), v) for v in viewers]
+    for cid in todo:
+        hit = [v for b, v in blobs if f"salebot={cid}" in b]
+        mins = round(sum(watched_minutes(v) for v in hit), 1)
+        con.execute("insert or replace into visits values (?, ?, ?, ?, ?)",
+                    (cid, ts, int(bool(hit)), mins, segment(bool(hit), mins)))
+
+
 def day_stats(day: datetime, with_room: bool = True) -> dict:
     """Цифры за день по всем сеансам."""
     slots, segs = [], {k: 0 for k, _, _ in SEG}
@@ -56,6 +76,8 @@ def day_stats(day: datetime, with_room: bool = True) -> dict:
             start = at(day, h)
             ts = int(start.timestamp())
             regs = registered_for(con, ts)
+            if regs and start + timedelta(minutes=80) < datetime.now(MSK):
+                sync_visits(con, start, ts, regs)
             rows = con.execute("select client_id, segment, minutes from visits "
                                "where ts = ? and visited = 1", (ts,)).fetchall()
             came = {c for c, _, _ in rows if c in regs}
