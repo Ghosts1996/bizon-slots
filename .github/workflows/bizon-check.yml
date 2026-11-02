@@ -16,13 +16,24 @@ jobs:
           script: |
             echo "::notice::token len=${#BIZON_TOKEN} hash=$(printf %s "$BIZON_TOKEN" | sha256sum | cut -c1-8)"
             B=https://online.bizon365.ru/api/v1
-            q() { curl -sS --max-time 20 -H "X-Token: $BIZON_TOKEN" "$B/$1"; }
-            q "webinars/reports/getlist?skip=0&limit=20" | python3 -c 'import sys,json
-            d=json.load(sys.stdin); print("::notice::reports count=%s" % d.get("count"))
-            for w in d.get("list",[]):
-                print("::notice::"+json.dumps({k:w.get(k) for k in ("name","text","type","created","webinarId","room")}, ensure_ascii=False)[:300])'
-            q "webinars/subpages/getSubpages" | python3 -c 'import sys,json
-            d=json.load(sys.stdin); print("::notice::subpages total=%s rooms=%s" % (d.get("total"), json.dumps(d.get("rooms"),ensure_ascii=False)[:300]))
-            for p in d.get("pages",[]): print("::notice::page "+json.dumps(p,ensure_ascii=False)[:300])'
+            q() { curl -sS --max-time 30 -H "X-Token: $BIZON_TOKEN" "$B/$1"; }
+            q "webinars/reports/getlist?skip=0&limit=3" > /tmp/l.json
+            python3 - <<'PY'
+            import json
+            d = json.load(open('/tmp/l.json'))
+            for w in d.get('list', [])[:3]:
+                print("::notice::item " + json.dumps({k: (v if not isinstance(v, str) else v[:80]) for k, v in w.items()}, ensure_ascii=False)[:900])
+            PY
+            WID=$(python3 -c "import json;d=json.load(open('/tmp/l.json'));w=d['list'][1];print(w.get('webinarId') or w.get('name'))")
+            q "webinars/reports/getviewers?webinarId=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$WID")&skip=0&limit=2" > /tmp/v.json
+            python3 - <<'PY'
+            import json
+            d = json.load(open('/tmp/v.json'))
+            print("::notice::viewers keys " + json.dumps(list(d.keys()) if isinstance(d, dict) else str(type(d)))[:300])
+            vs = d.get('viewers') or d.get('list') or []
+            for v in vs[:2]:
+                print("::notice::viewer " + json.dumps(v, ensure_ascii=False)[:900])
+            if not vs: print("::notice::raw " + json.dumps(d, ensure_ascii=False)[:600])
+            PY
         env:
           BIZON_TOKEN: ${{ secrets.BIZON_TOKEN }}
