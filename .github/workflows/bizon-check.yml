@@ -22,12 +22,12 @@ jobs:
             echo "::notice::resolve $(curl -sS -G $L/resolve --data-urlencode 'text=Завтра 14:00 по МСК' | python3 -c 'import sys,json;d=json.load(sys.stdin);print({k:d[k] for k in ("valid","text","remind_60","delay_60","delay_gap","delay_5","room_url")})')"
             echo "::notice::room $(curl -sS -o /dev/null -w '%{http_code} -> %{url_effective}' -L --max-time 20 'https://start.bizon365.ru/room/209601/avtoweb?salebot=test')"
             q() { curl -sS --max-time 30 -H "X-Token: $BIZON_TOKEN" "$B/$1"; }
-            q "webinars/reports/getviewers?webinarId=209601%3A93eadb1773d9*2026-10-08T19%3A22%3A00&skip=0&limit=1" > /tmp/v.json
+            q "webinars/reports/getviewers?webinarId=209601%3A93eadb1773d9*2026-10-08T19%3A22%3A22&skip=0&limit=1" > /tmp/v.json
             python3 - <<'PY'
             import json
             d=json.load(open('/tmp/v.json'))
             vs=d.get('viewers') or []
-            print("::notice::live total=%s" % d.get('total'))
+            print("::notice::live raw " + json.dumps(d, ensure_ascii=False)[:300])
             if vs: print("::notice::viewer-keys " + ",".join(sorted(vs[0].keys())))
             if vs: print("::notice::viewer " + json.dumps({k:(str(v)[:60]) for k,v in vs[0].items() if k not in ('phone','email','username','chatUserId')}, ensure_ascii=False)[:900])
             PY
