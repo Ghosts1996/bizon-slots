@@ -98,3 +98,24 @@ def test_late_registration_immediate_hour(tmp_path, monkeypatch):
     m.save_registration("c2", ts, int(t(20, 40).timestamp()))
     assert m.claim_step("c2", "hour", int(t(20, 40, 5).timestamp())) == ts
     assert m.claim_step("c2", "link", int(t(20, 55).timestamp())) == ts
+
+
+def test_segments():
+    from app.main import segment, watched_minutes
+    assert watched_minutes({"vi": [{"s": 2, "e": 4237}]}) > 70
+    assert watched_minutes({"view": 0, "viewTill": 600000}) == 10
+    assert segment(False, 0) == "none" and segment(True, 5) == "early"
+    assert segment(True, 30) == "left" and segment(True, 65) == "full"
+
+
+def test_registered_for_moves(tmp_path, monkeypatch):
+    import app.main as m
+    from app.report import registered_for
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    ts19, ts21 = int(t(19).timestamp()), int(t(21).timestamp())
+    m.save_registration("a", ts19, int(t(10).timestamp()))
+    m.save_registration("b", ts19, int(t(11).timestamp()))
+    m.save_registration("b", ts21, int(t(12).timestamp()))  # перенёс на 21:00
+    with m.db() as con:
+        assert registered_for(con, ts19) == {"a"}
+        assert registered_for(con, ts21) == {"b"}

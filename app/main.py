@@ -177,7 +177,13 @@ def check_visit(client_id: str, ts: int) -> dict:
         hit = [v for v in session_viewers(webinar_id)
                if needle in json.dumps(v, ensure_ascii=False)
                or str(v.get("salebot") or "") == str(client_id)]
-        return {"ready": 1, "visited": int(bool(hit)), "webinar_id": webinar_id}
+        minutes = round(sum(watched_minutes(v) for v in hit), 1)
+        seg = segment(bool(hit), minutes)
+        save_visit(client_id, int(ts), int(bool(hit)), minutes, seg)
+        return {"ready": 1, "visited": int(bool(hit)), "webinar_id": webinar_id,
+                "minutes": minutes, "segment": seg,
+                "seg_early": int(seg == "early"), "seg_left": int(seg == "left"),
+                "seg_full": int(seg == "full")}
     except Exception as e:  # сеть/токен — бот получит ready=0 и проверит позже
         return {"ready": 0, "visited": 0, "webinar_id": webinar_id, "error": str(e)[:200]}
 
@@ -187,7 +193,8 @@ def visited_endpoint(client_id: str = Query(...), ts: int = Query(None)):
     real_ts = claim_step(client_id, "check", int(now_msk().timestamp()))
     if real_ts is None:
         # устаревшая цепочка или повтор — обе ветки (visited 1/0) не сработают
-        return {"ready": 0, "visited": -1}
+        return {"ready": 0, "visited": -1, "minutes": 0, "segment": "",
+                "seg_early": 0, "seg_left": 0, "seg_full": 0}
     return check_visit(client_id, real_ts)
 
 
@@ -208,6 +215,10 @@ def db():
     con.execute("create table if not exists reg (client_id text primary key, ts integer, reg_at integer)")
     con.execute("create table if not exists sent (client_id text, ts integer, step text, "
                 "primary key (client_id, ts, step))")
+    # история всех записей (reg хранит только последнюю) — для отчётов
+    con.execute("create table if not exists reg_log (client_id text, ts integer, reg_at integer)")
+    con.execute("create table if not exists visits (client_id text, ts integer, visited integer, "
+                "minutes real, segment text, primary key (client_id, ts))")
     return con
 
 
@@ -215,6 +226,7 @@ def save_registration(client_id: str, ts: int, reg_at: int) -> None:
     with _lock, db() as con:
         con.execute("insert into reg values (?, ?, ?) on conflict(client_id) do update set "
                     "ts = excluded.ts, reg_at = excluded.reg_at", (client_id, ts, reg_at))
+        con.execute("insert into reg_log values (?, ?, ?)", (client_id, ts, reg_at))
 
 
 def expected_at(step: str, ts: int, reg_at: int) -> int:
@@ -258,3 +270,37 @@ def due_endpoint(client_id: str = Query(...), step: str = Query(..., pattern="^(
     head = "Через час встречаемся!" if left > 50 * 60 else "Совсем скоро начинаем!"
     text = HOUR_TEXT.format(head=head, time=f"{s:%H:%M}") if step == "hour" else LINK_TEXT
     return {"ok": 1, "text": text, "time": f"{s:%H:%M}"}
+
+
+
+# --- Сегменты по времени просмотра ------------------------------------------
+
+EARLY_MIN = float(os.getenv("EARLY_MIN", "15"))   # ушёл в начале
+OFFER_MIN = float(os.getenv("OFFER_MIN", "55"))   # минута, на которой начинается предложение
+
+
+def watched_minutes(v: dict) -> float:
+    """Сколько минут зритель был в комнате. vi — интервалы просмотра в секундах."""
+    vi = v.get("vi") or []
+    if isinstance(vi, list) and vi:
+        return sum(max(0, (i.get("e") or 0) - (i.get("s") or 0)) for i in vi) / 60
+    try:
+        return max(0, int(v.get("viewTill")) - int(v.get("view"))) / 60000
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def segment(visited: bool, minutes: float) -> str:
+    if not visited:
+        return "none"
+    if minutes < EARLY_MIN:
+        return "early"
+    if minutes < OFFER_MIN:
+        return "left"
+    return "full"
+
+
+def save_visit(client_id: str, ts: int, visited: int, minutes: float, seg: str) -> None:
+    with _lock, db() as con:
+        con.execute("insert or replace into visits values (?, ?, ?, ?, ?)",
+                    (client_id, ts, visited, minutes, seg))

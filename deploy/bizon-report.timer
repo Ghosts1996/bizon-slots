@@ -1,0 +1,9 @@
+[Unit]
+Description=bizon-slots: отчёт в 09:00 МСК
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
