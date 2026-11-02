@@ -15,10 +15,27 @@ jobs:
           envs: BIZON_TOKEN
           script: |
             echo "::notice::token len=${#BIZON_TOKEN} hash=$(printf %s "$BIZON_TOKEN" | sha256sum | cut -c1-8)"
-            echo "::notice::dns $(getent ahosts api.telegram.org | awk '{print $1}' | sort -u | tr '\n' ' ')"
-            echo "::notice::v4 $(curl -4 -sS -o /dev/null -w '%{http_code} %{time_total}s' --max-time 15 https://api.telegram.org/ 2>&1 | tail -1)"
-            echo "::notice::v6 $(curl -6 -sS -o /dev/null -w '%{http_code}' --max-time 10 https://api.telegram.org/ 2>&1 | tail -1)"
-            echo "::notice::ip4 $(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 --resolve api.telegram.org:443:149.154.167.220 https://api.telegram.org/ 2>&1 | tail -1)"
-            echo "::notice::google $(curl -4 -sS -o /dev/null -w '%{http_code}' --max-time 10 https://www.google.com/ 2>&1 | tail -1)"
+            cd /opt/bizon-slots
+            for u in bizon-slots bizon-tgbot; do echo "::notice::svc $u $(systemctl is-active $u)"; done
+            echo "::notice::timers $(systemctl list-timers --no-pager | grep -E 'bizon-(report|watchdog)' | awk '{print $1,$2,$(NF-1)}' | tr '\n' ';')"
+            echo "::notice::git $(sed -n 1p app/report.py | cut -c1-40) sync=$(grep -c sync_visits app/report.py)"
+            set -a; . ./.env; set +a
+            venv/bin/python - <<'PY'
+            import datetime, json
+            from app.main import db, MSK
+            from app import report as r
+            con = db(); r.acl_tables(con)
+            f = lambda t: datetime.datetime.fromtimestamp(t, MSK).strftime('%d.%m %H:%M')
+            for cid, ts, reg in con.execute('select client_id, ts, reg_at from reg order by reg_at desc limit 5'):
+                print(f"::notice::reg {cid[:4]}*** slot={f(ts)} at={f(reg)}")
+            for cid, ts, step in con.execute('select client_id, ts, step from sent order by rowid desc limit 6'):
+                print(f"::notice::sent {cid[:4]}*** slot={f(ts)} {step}")
+            print("::notice::users " + str([(c[:4], role, a) for c, role, a in con.execute('select chat_id, role, alerts from tg_users')]))
+            print("::notice::invites " + str(con.execute('select count(*), sum(used_by is not null) from tg_invites').fetchone()))
+            st = r.day_stats(datetime.datetime.now(MSK))
+            print("::notice::today " + json.dumps({k: st[k] for k in ('reg','came','room')}) + " " + str([(s['hour'], s['reg'], s['came'], s['room']) for s in st['slots']]))
+            PY
+            echo "::notice::journal $(journalctl -u bizon-slots --since '-90min' --no-pager | grep -oE 'GET /(resolve|due|visited)[^ ]*' | sed -E 's/client_id=[^&]+/client_id=*/; s/text=[^&]+/text=*/' | sort | uniq -c | tr '\n' ';')"
+            echo "::notice::botlog $(journalctl -u bizon-tgbot --since '-90min' --no-pager | tail -3 | tr '\n' ' ' | cut -c1-300)"
         env:
           BIZON_TOKEN: ${{ secrets.BIZON_TOKEN }}
