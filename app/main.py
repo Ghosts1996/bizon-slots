@@ -6,6 +6,8 @@
 import json
 import os
 import re
+import sqlite3
+import threading
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -128,11 +130,13 @@ def resolve_ts(ts: int, now: datetime) -> dict:
 
 @app.get("/resolve")
 def resolve_endpoint(text: str = Query(None, description="Текст нажатой кнопки"),
-                     ts: int = Query(None, description="Unix-время сеанса из /slots")):
+                     ts: int = Query(None, description="Unix-время сеанса из /slots"),
+                     client_id: str = Query(None, description="client_id из Сейлбота")):
     now = now_msk()
-    if ts:
-        return resolve_ts(ts, now)
-    return resolve(text or "", now)
+    r = resolve_ts(ts, now) if ts else resolve(text or "", now)
+    if client_id and r.get("valid"):
+        save_registration(client_id, int(r["ts"]), int(now.timestamp()))
+    return r
 
 
 # --- Посещаемость: отчёт Бизона по конкретному сеансу -----------------------
@@ -179,5 +183,78 @@ def check_visit(client_id: str, ts: int) -> dict:
 
 
 @app.get("/visited")
-def visited_endpoint(client_id: str = Query(...), ts: int = Query(...)):
-    return check_visit(client_id, ts)
+def visited_endpoint(client_id: str = Query(...), ts: int = Query(None)):
+    real_ts = claim_step(client_id, "check", int(now_msk().timestamp()))
+    if real_ts is None:
+        # устаревшая цепочка или повтор — обе ветки (visited 1/0) не сработают
+        return {"ready": 0, "visited": -1}
+    return check_visit(client_id, real_ts)
+
+
+# --- Защита от дублей при повторной записи ---------------------------------
+#
+# Сейлбот не умеет отменять уже поставленные таймеры, поэтому при перезаписи
+# старая цепочка (напоминание/ссылка/проверка) всё равно сработает.
+# Сервер помнит последнюю запись клиента и в момент срабатывания решает,
+# относится ли этот шаг к актуальной записи и не был ли он уже отправлен.
+
+DB_PATH = os.getenv("DB_PATH", "/opt/bizon-slots/data.db")
+TOLERANCE = 10 * 60  # таймеры Сейлбота могут опаздывать на пару минут
+_lock = threading.Lock()
+
+
+def db():
+    con = sqlite3.connect(DB_PATH, timeout=10)
+    con.execute("create table if not exists reg (client_id text primary key, ts integer, reg_at integer)")
+    con.execute("create table if not exists sent (client_id text, ts integer, step text, "
+                "primary key (client_id, ts, step))")
+    return con
+
+
+def save_registration(client_id: str, ts: int, reg_at: int) -> None:
+    with _lock, db() as con:
+        con.execute("insert into reg values (?, ?, ?) on conflict(client_id) do update set "
+                    "ts = excluded.ts, reg_at = excluded.reg_at", (client_id, ts, reg_at))
+
+
+def expected_at(step: str, ts: int, reg_at: int) -> int:
+    if step == "hour":
+        return max(reg_at, ts - 3600)
+    if step == "link":
+        return max(reg_at, ts - 300)
+    if step == "check":
+        return max(reg_at, ts - 300) + 95 * 60
+    raise ValueError(step)
+
+
+def claim_step(client_id: str, step: str, now_ts: int):
+    """Возвращает ts сеанса, если шаг актуален и ещё не отправлялся, иначе None."""
+    with _lock, db() as con:
+        row = con.execute("select ts, reg_at from reg where client_id = ?", (client_id,)).fetchone()
+        if not row:
+            return None
+        ts, reg_at = row
+        if abs(now_ts - expected_at(step, ts, reg_at)) > TOLERANCE:
+            return None
+        cur = con.execute("insert or ignore into sent values (?, ?, ?)", (client_id, ts, step))
+        return ts if cur.rowcount else None
+
+
+HOUR_TEXT = ("⏰ {head}\nВ {time} по МСК начинаем семинар. Захватите блокнот с ручкой, "
+             "будут практические упражнения.\n\nСсылку на эфир пришлю за 5 минут до старта. "
+             "Подтвердите, что будете 👇")
+LINK_TEXT = ("🎬 Через 5 минут встречаемся!\nЖмите кнопку — она откроет страницу эфира.\n\n"
+             "Можно зайти прямо сейчас и спокойно подготовиться 👇")
+
+
+@app.get("/due")
+def due_endpoint(client_id: str = Query(...), step: str = Query(..., pattern="^(hour|link)$")):
+    now = now_msk()
+    ts = claim_step(client_id, step, int(now.timestamp()))
+    if ts is None:
+        return {"ok": 0, "text": ""}
+    s = datetime.fromtimestamp(ts, MSK)
+    left = ts - int(now.timestamp())
+    head = "Через час встречаемся!" if left > 50 * 60 else "Совсем скоро начинаем!"
+    text = HOUR_TEXT.format(head=head, time=f"{s:%H:%M}") if step == "hour" else LINK_TEXT
+    return {"ok": 1, "text": text, "time": f"{s:%H:%M}"}

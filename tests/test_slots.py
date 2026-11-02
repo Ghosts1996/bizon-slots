@@ -73,3 +73,28 @@ def test_gap_everyone_gets_both():
     assert late["delay_60"] == 0 and late["delay_gap"] == 300 and late["remind_head"].startswith("Совсем")
     last = resolve("Сегодня 21:00 по МСК", t(20, 58))
     assert last["delay_gap"] == 0
+
+
+def test_dedup_chain(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    ts19 = int(t(19).timestamp()); ts16 = int(t(16, d=31).timestamp())
+    m.save_registration("c1", ts19, int(t(18, 7).timestamp()))
+    # передумал и записался на завтра 16:00
+    m.save_registration("c1", ts16, int(t(18, 20).timestamp()))
+    # старая цепочка 19:00: шаг "ссылка" в 18:55 — уже не актуален
+    assert m.claim_step("c1", "link", int(t(18, 55).timestamp())) is None
+    # новая цепочка: напоминание завтра в 15:00 — один раз
+    assert m.claim_step("c1", "hour", int(t(15, 0, 30, d=31).timestamp())) == ts16
+    assert m.claim_step("c1", "hour", int(t(15, 1, d=31).timestamp())) is None
+    assert m.claim_step("c1", "link", int(t(15, 55, d=31).timestamp())) == ts16
+    assert m.claim_step("c1", "check", int(t(17, 30, d=31).timestamp())) == ts16
+
+
+def test_late_registration_immediate_hour(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    ts = int(t(21).timestamp())
+    m.save_registration("c2", ts, int(t(20, 40).timestamp()))
+    assert m.claim_step("c2", "hour", int(t(20, 40, 5).timestamp())) == ts
+    assert m.claim_step("c2", "link", int(t(20, 55).timestamp())) == ts
