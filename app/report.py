@@ -16,8 +16,10 @@ import html
 import json
 import os
 import smtplib
+import socket
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
@@ -189,14 +191,39 @@ def plain(text: str) -> str:
 
 # --- Доставка -----------------------------------------------------------------
 
+# У российских хостингов часть адресов api.telegram.org недоступна. Пробуем
+# рабочие IP по очереди (сертификат проверяется по имени, так что это безопасно).
+TG_HOST = "api.telegram.org"
+TG_IPS = [ip for ip in os.getenv("TG_API_IPS", "149.154.167.220,149.154.167.99,"
+                                 "149.154.166.110,149.154.175.100").split(",") if ip]
+_orig_getaddrinfo = socket.getaddrinfo
+
+
+def _getaddrinfo(host, port, *args, **kwargs):
+    if host == TG_HOST:
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port)) for ip in TG_IPS]
+    return _orig_getaddrinfo(host, port, *args, **kwargs)
+
+
+socket.getaddrinfo = _getaddrinfo
+
 def tg(method: str, _http_timeout: int = 30, **params) -> dict:
     token = os.getenv("TG_TOKEN", "")
     if not token:
         raise RuntimeError("TG_TOKEN не задан")
     data = urllib.parse.urlencode(params).encode()
     req = urllib.request.Request(f"https://api.telegram.org/bot{token}/{method}", data=data)
-    with urllib.request.urlopen(req, timeout=_http_timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
+    last = None
+    for _ in range(len(TG_IPS)):
+        try:
+            with urllib.request.urlopen(req, timeout=_http_timeout) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError:
+            raise
+        except OSError as e:  # адрес недоступен — переставляем его в конец и пробуем следующий
+            last = e
+            TG_IPS.append(TG_IPS.pop(0))
+    raise last
 
 
 # Постоянное меню внизу чата — чтобы не вспоминать команды
