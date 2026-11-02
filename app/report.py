@@ -1,9 +1,19 @@
 """Ежедневный отчёт по автовебинару и сторож.
 
-python -m app.report daily [--dry]   — отчёт за вчера на REPORT_TO
-python -m app.report watchdog        — проверка токена Бизона, тревога на ALERT_TO
+Доставка — Telegram-бот (TG_TOKEN). Подписка по ссылкам:
+  t.me/<бот>?start=report — получать ежедневный отчёт
+  t.me/<бот>?start=alert  — получать отчёт и тревоги
+Если задан SMTP_*, дополнительно дублирует на почту.
+
+python -m app.report daily [--dry]   — отчёт за вчера
+python -m app.report watchdog        — проверка токена Бизона
+python -m app.report poll            — принять новые подписки в боте
+python -m app.report test            — тестовое сообщение всем подписчикам
 """
+import json
 import os
+import urllib.parse
+import urllib.request
 import smtplib
 import sys
 import time
@@ -27,6 +37,83 @@ def send(to: str, subject: str, body: str) -> None:
     with smtplib.SMTP_SSL(host, int(os.getenv("SMTP_PORT", "465")), timeout=30) as smtp:
         smtp.login(user, pwd)
         smtp.send_message(msg)
+
+
+# --- Telegram -----------------------------------------------------------------
+
+def tg(method: str, **params) -> dict:
+    token = os.getenv("TG_TOKEN", "")
+    if not token:
+        raise RuntimeError("TG_TOKEN не задан")
+    data = urllib.parse.urlencode(params).encode()
+    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/{method}", data=data)
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def subs_table(con):
+    con.execute("create table if not exists tg_subs (chat_id text, role text, name text, "
+                "primary key (chat_id, role))")
+    con.execute("create table if not exists kv (k text primary key, v text)")
+
+
+def poll() -> None:
+    """Забирает новые сообщения бота и оформляет подписки по /start report|alert."""
+    with db() as con:
+        subs_table(con)
+        row = con.execute("select v from kv where k = 'tg_offset'").fetchone()
+        offset = int(row[0]) if row else 0
+        upd = tg("getUpdates", offset=offset, timeout=0).get("result", [])
+        for u in upd:
+            offset = max(offset, u["update_id"] + 1)
+            m = u.get("message") or {}
+            text, chat = (m.get("text") or "").strip(), m.get("chat") or {}
+            if not chat:
+                continue
+            cid = str(chat["id"])
+            name = chat.get("first_name") or chat.get("title") or ""
+            role = text.split()[1] if text.startswith("/start ") and len(text.split()) > 1 else ""
+            if role in ("report", "alert"):
+                con.execute("insert or replace into tg_subs values (?, ?, ?)", (cid, role, name))
+                what = ("ежедневный отчёт по автовебинару (каждое утро в 9:00)" if role == "report"
+                        else "отчёты и уведомления о сбоях")
+                tg("sendMessage", chat_id=cid, text=f"Готово ✅ Вы подписаны на {what}.")
+            elif text in ("/stop", "Отписаться"):
+                con.execute("delete from tg_subs where chat_id = ?", (cid,))
+                tg("sendMessage", chat_id=cid, text="Вы отписались от уведомлений.")
+            elif text.startswith("/start"):
+                tg("sendMessage", chat_id=cid, text="Это служебный бот отчётов автовебинара. "
+                   "Для подписки используйте ссылку, которую вам прислали.")
+        con.execute("insert or replace into kv values ('tg_offset', ?)", (str(offset),))
+
+
+def recipients(role: str) -> list:
+    with db() as con:
+        subs_table(con)
+        roles = ("report", "alert") if role == "report" else ("alert",)
+        q = "select distinct chat_id from tg_subs where role in (%s)" % ",".join("?" * len(roles))
+        return [r[0] for r in con.execute(q, roles)]
+
+
+def notify(role: str, subject: str, body: str) -> int:
+    """role: report — всем подписчикам; alert — только тем, кто на тревогах."""
+    sent = 0
+    if os.getenv("TG_TOKEN"):
+        try:
+            poll()
+        except Exception:
+            pass
+        for cid in recipients(role):
+            try:
+                tg("sendMessage", chat_id=cid, text=f"{subject}\n\n{body}")
+                sent += 1
+            except Exception:
+                pass
+    mail_to = os.getenv("REPORT_TO" if role == "report" else "ALERT_TO", "")
+    if os.getenv("SMTP_USER") and mail_to:
+        send(mail_to, subject, body)
+        sent += 1
+    return sent
 
 
 def registered_for(con, ts: int) -> set:
@@ -84,7 +171,7 @@ def daily(dry: bool) -> None:
     if dry:
         print(text)
         return
-    send(os.getenv("REPORT_TO", ""), f"Автовебинар: итоги за {day:%d.%m}", text)
+    notify("report", f"📊 Автовебинар: итоги за {day:%d.%m}", text)
 
 
 def watchdog() -> None:
@@ -99,14 +186,14 @@ def watchdog() -> None:
     if not problem:
         if os.path.exists(mark):
             os.remove(mark)
-            send(os.getenv("ALERT_TO", ""), "✅ Автовебинар: связь с Бизоном восстановлена",
-                 "Проверка посещаемости снова работает.")
+            notify("alert", "✅ Автовебинар: связь с Бизоном восстановлена",
+                   "Проверка посещаемости снова работает.")
         return
     # не спамим: одно письмо раз в 6 часов
     if os.path.exists(mark) and time.time() - os.path.getmtime(mark) < 6 * 3600:
         return
-    send(os.getenv("ALERT_TO", ""), "⚠️ Автовебинар: проблема с Бизоном",
-         problem + "\n\nЕсли токен меняли — обновите секрет BIZON_TOKEN в GitHub и перезапустите деплой.")
+    notify("alert", "⚠️ Автовебинар: проблема с Бизоном",
+           problem + "\n\nЕсли токен меняли — обновите секрет BIZON_TOKEN в GitHub и перезапустите деплой.")
     open(mark, "w").close()
 
 
@@ -116,5 +203,14 @@ if __name__ == "__main__":
         daily("--dry" in sys.argv)
     elif cmd == "watchdog":
         watchdog()
+    elif cmd == "poll":
+        if os.getenv("TG_TOKEN"):
+            poll()
+    elif cmd == "test":
+        n = notify("report", "🔔 Проверка связи", "Отчёты автовебинара будут приходить сюда.")
+        print(f"sent={n}")
+    elif cmd == "links":
+        me = tg("getMe")["result"]["username"]
+        print(f"https://t.me/{me}?start=report https://t.me/{me}?start=alert")
     else:
         print(__doc__)
