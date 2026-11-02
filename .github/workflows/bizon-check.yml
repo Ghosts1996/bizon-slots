@@ -16,31 +16,24 @@ jobs:
           script: |
             echo "::notice::token len=${#BIZON_TOKEN} hash=$(printf %s "$BIZON_TOKEN" | sha256sum | cut -c1-8)"
             cd /opt/bizon-slots
-            for u in bizon-slots bizon-tgbot; do echo "::notice::svc $u $(systemctl is-active $u)"; done
-            echo "::notice::timers $(systemctl list-timers --no-pager | grep -E 'bizon-(report|watchdog)' | awk '{print $1,$2,$(NF-1)}' | tr '\n' ';')"
-            echo "::notice::git $(sed -n 1p app/report.py | cut -c1-40) sync=$(grep -c sync_visits app/report.py)"
             set -a; . ./.env; set +a
-            venv/bin/python - <<'PY'
-            import datetime, json
+            venv/bin/python - <<'PY' > /tmp/diag.txt 2>&1
+            import datetime, json, traceback
             from app.main import db, MSK
             from app import report as r
-            con = db(); r.acl_tables(con)
-            f = lambda t: datetime.datetime.fromtimestamp(t, MSK).strftime('%d.%m %H:%M')
-            for cid, ts, reg in con.execute('select client_id, ts, reg_at from reg order by reg_at desc limit 5'):
-                print(f"::notice::reg {cid[:4]}*** slot={f(ts)} at={f(reg)}")
-            for cid, ts, step in con.execute('select client_id, ts, step from sent order by rowid desc limit 6'):
-                print(f"::notice::sent {cid[:4]}*** slot={f(ts)} {step}")
-            import traceback
             try:
-                print("::notice::users " + str([(c[:4], role, a) for c, role, a in con.execute('select chat_id, role, alerts from tg_users')]))
-                print("::notice::invites " + str(con.execute('select count(*), sum(used_by is not null) from tg_invites').fetchone()))
+                con = db(); r.acl_tables(con)
+                print("users", [(c[:4], role, a) for c, role, a in con.execute('select chat_id, role, alerts from tg_users')])
+                print("invites", con.execute('select count(*), sum(used_by is not null) from tg_invites').fetchone())
+                print("regs", con.execute('select count(*) from reg_log').fetchone()[0])
                 con.commit()
                 st = r.day_stats(datetime.datetime.now(MSK))
-                print("::notice::today " + json.dumps({k: st[k] for k in ('reg','came','room')}) + " " + str([(s['hour'], s['reg'], s['came'], s['room']) for s in st['slots']]))
+                print("today", {k: st[k] for k in ('reg','came','room')}, [(s['hour'], s['reg'], s['came'], s['room']) for s in st['slots']])
             except Exception:
-                print("::notice::ERR " + traceback.format_exc().replace(chr(10), ' | ')[-700:])
+                traceback.print_exc()
             PY
-            echo "::notice::journal $(journalctl -u bizon-slots --since '-90min' --no-pager | grep -oE 'GET /(resolve|due|visited)[^ ]*' | sed -E 's/client_id=[^&]+/client_id=*/; s/text=[^&]+/text=*/' | sort | uniq -c | tr '\n' ';')"
-            echo "::notice::botlog $(journalctl -u bizon-tgbot --since '-90min' --no-pager | tail -3 | tr '\n' ' ' | cut -c1-300)"
+            J=$(journalctl -u bizon-slots --since '-120min' --no-pager | grep -oE 'GET /(resolve|due|visited)[^ ]*' | sed -E 's/client_id=[^&]+/c=*/; s/text=[^&]+/t=*/' | sort | uniq -c | tr -s ' ' | tr '\n' ';')
+            B=$(journalctl -u bizon-tgbot --since '-120min' --no-pager | tail -2 | tr '\n' ' ' | cut -c1-200)
+            echo "::notice::$(systemctl is-active bizon-slots bizon-tgbot | tr '\n' ' ') ¦ $(tr '\n' ' ' < /tmp/diag.txt | cut -c1-900) ¦ $J ¦ bot: $B"
         env:
           BIZON_TOKEN: ${{ secrets.BIZON_TOKEN }}
