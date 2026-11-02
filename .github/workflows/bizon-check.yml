@@ -15,22 +15,18 @@ jobs:
           envs: BIZON_TOKEN
           script: |
             echo "::notice::token len=${#BIZON_TOKEN} hash=$(printf %s "$BIZON_TOKEN" | sha256sum | cut -c1-8)"
-            B=https://online.bizon365.ru/api/v1
             L=http://127.0.0.1:8088
-            echo "::notice::health $(curl -sS $L/health)"
-            echo "::notice::slots $(curl -sS $L/slots | python3 -c 'import sys,json;d=json.load(sys.stdin);print({k:d[k] for k in ("now","b1","b2","b3","b4","m1","m4")})')"
-            echo "::notice::resolve $(curl -sS -G $L/resolve --data-urlencode 'text=Завтра 14:00 по МСК' | python3 -c 'import sys,json;d=json.load(sys.stdin);print({k:d[k] for k in ("valid","text","remind_60","delay_60","delay_gap","delay_5","room_url")})')"
-            echo "::notice::room $(curl -sS -o /dev/null -w '%{http_code} -> %{url_effective}' -L --max-time 20 'https://start.bizon365.ru/room/209601/avtoweb?salebot=test')"
-            q() { curl -sS --max-time 30 -H "X-Token: $BIZON_TOKEN" "$B/$1"; }
-            q "webinars/reports/getviewers?webinarId=209601%3A93eadb1773d9*2026-10-08T19%3A22%3A22&skip=0&limit=1" > /tmp/v.json
+            echo "::notice::health $(curl -sS $L/health) $(date '+%H:%M %Z')"
             python3 - <<'PY'
-            import json
-            d=json.load(open('/tmp/v.json'))
-            vs=d.get('viewers') or []
-            print("::notice::live raw " + json.dumps(d, ensure_ascii=False)[:300])
-            if vs: print("::notice::viewer-keys " + ",".join(sorted(vs[0].keys())))
-            if vs: print("::notice::viewer " + json.dumps({k:(str(v)[:60]) for k,v in vs[0].items() if k not in ('phone','email','username','chatUserId')}, ensure_ascii=False)[:900])
+            import sqlite3, datetime
+            con = sqlite3.connect('/opt/bizon-slots/data.db')
+            tz = datetime.timezone(datetime.timedelta(hours=3))
+            f = lambda t: datetime.datetime.fromtimestamp(t, tz).strftime('%d.%m %H:%M')
+            for cid, ts, reg in con.execute('select client_id, ts, reg_at from reg'):
+                print(f"::notice::reg client={cid[:4]}*** slot={f(ts)} registered={f(reg)}")
+            for cid, ts, step in con.execute('select client_id, ts, step from sent'):
+                print(f"::notice::sent client={cid[:4]}*** slot={f(ts)} step={step}")
             PY
-            q "webinars/reports/getlist?skip=0&limit=50&type=LiveWebinars" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("::notice::live ids "+" | ".join(w["webinarId"] for w in d.get("list",[])))'
+            echo "::notice::journal $(journalctl -u bizon-slots --since '-3h' --no-pager | grep -E 'GET /(resolve|due|visited)' | tail -8 | sed -E 's/client_id=[^& ]+/client_id=***/g' | tr '\n' ' ' | cut -c1-900)"
         env:
           BIZON_TOKEN: ${{ secrets.BIZON_TOKEN }}
