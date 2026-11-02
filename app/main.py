@@ -50,6 +50,13 @@ def build(now: datetime) -> dict:
     for i in range(MAX_SLOTS):
         out[f"t{i + 1}"] = today[i]["text"] if i < len(today) else ""
         out[f"m{i + 1}"] = tomorrow[i]["text"] if i < len(tomorrow) else ""
+        out[f"mts{i + 1}"] = tomorrow[i]["ts"] if i < len(tomorrow) else 0
+    # b1..b4 — ближайшие 4 сеанса (сначала оставшиеся сегодня, потом завтра).
+    # Всегда ровно 4 кнопки, без пустых: в боте не нужны условия на количество.
+    upcoming = (today + tomorrow)[:MAX_SLOTS]
+    for i, s in enumerate(upcoming):
+        out[f"b{i + 1}"] = s["text"]
+        out[f"bts{i + 1}"] = s["ts"]
     return out
 
 
@@ -68,6 +75,7 @@ def resolve(text: str, now: datetime) -> dict:
     if s <= now:
         return {"valid": 0, "reason": "slot_passed"}
     seconds_left = int((s - now).total_seconds())
+    room = os.getenv("ROOM_URL", "https://start.bizon365.ru/room/209601/avtoweb")
     return {
         "valid": 1,
         **slot_payload(s, m.group(1).capitalize()),
@@ -76,6 +84,7 @@ def resolve(text: str, now: datetime) -> dict:
         "remind_60": int(seconds_left > 3600),
         "delay_60": max(seconds_left - 3600, 0),
         "delay_7": max(seconds_left - 420, 0),
+        "room_url": room,
     }
 
 
@@ -89,6 +98,16 @@ def slots():
     return build(now_msk())
 
 
+def resolve_ts(ts: int, now: datetime) -> dict:
+    s = datetime.fromtimestamp(int(ts), MSK)
+    label = "Сегодня" if s.date() == now.date() else "Завтра"
+    return resolve(f"{label} {s:%H:%M}", now) if s.minute == 0 else {"valid": 0, "reason": "unknown_slot"}
+
+
 @app.get("/resolve")
-def resolve_endpoint(text: str = Query(..., description="Текст нажатой кнопки")):
-    return resolve(text, now_msk())
+def resolve_endpoint(text: str = Query(None, description="Текст нажатой кнопки"),
+                     ts: int = Query(None, description="Unix-время сеанса из /slots")):
+    now = now_msk()
+    if ts:
+        return resolve_ts(ts, now)
+    return resolve(text or "", now)

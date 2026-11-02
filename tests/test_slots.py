@@ -42,3 +42,18 @@ def test_resolve_ok_and_delays():
 def test_resolve_tomorrow():
     r = resolve("Завтра 14:00 по МСК", t(22))
     assert r["date"] == "31.10.2026" and r["remind_60"] == 1
+
+
+def test_upcoming_buttons_always_four():
+    r = build(t(20))
+    assert [r[f"b{i}"] for i in range(1, 5)] == [
+        "Сегодня 21:00 по МСК", "Завтра 14:00 по МСК", "Завтра 16:00 по МСК", "Завтра 19:00 по МСК"]
+    r = build(t(22))
+    assert r["b1"] == "Завтра 14:00 по МСК" and r["b4"] == "Завтра 21:00 по МСК"
+
+
+def test_resolve_by_ts():
+    from app.main import resolve_ts
+    ts = build(t(13))["bts1"]
+    assert resolve_ts(ts, t(13, 30))["valid"] == 1
+    assert resolve_ts(ts, t(14, 0, 1))["valid"] == 0
