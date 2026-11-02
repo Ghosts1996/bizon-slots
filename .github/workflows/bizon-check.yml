@@ -27,6 +27,11 @@ jobs:
                 print("invites", con.execute('select count(*), sum(used_by is not null) from tg_invites').fetchone())
                 print("regs", con.execute('select count(*) from reg_log').fetchone()[0])
                 con.commit()
+                from app.main import session_viewers, watched_minutes
+                vs = session_viewers("209601:avtoweb*2026-11-02T21:00:00")
+                print("viewers21", len(vs))
+                for v in vs[:6]:
+                    print("V", {k: (str(v.get(k))[:90]) for k in ("url", "username", "view", "viewTill", "vi", "finished", "mob")}, "min=", round(watched_minutes(v),1))
                 st = r.day_stats(datetime.datetime.now(MSK))
                 print("today", {k: st[k] for k in ('reg','came','room')}, [(s['hour'], s['reg'], s['came'], s['room']) for s in st['slots']])
             except Exception:
@@ -34,6 +39,6 @@ jobs:
             PY
             J=$(journalctl -u bizon-slots --since '-120min' --no-pager | grep -oE 'GET /(resolve|due|visited)[^ ]*' | sed -E 's/client_id=[^&]+/c=*/; s/text=[^&]+/t=*/' | sort | uniq -c | tr -s ' ' | tr '\n' ';')
             B=$(journalctl -u bizon-tgbot --since '-120min' --no-pager | tail -2 | tr '\n' ' ' | cut -c1-200)
-            echo "::notice::$(systemctl is-active bizon-slots bizon-tgbot | tr '\n' ' ') ¦ $(tr '\n' ' ' < /tmp/diag.txt | cut -c1-900) ¦ $J ¦ bot: $B"
+            echo "::notice::$(systemctl is-active bizon-slots bizon-tgbot | tr '\n' ' ') ¦ $(tr '\n' ' ' < /tmp/diag.txt | cut -c1-2500) ¦ $J ¦ bot: $B"
         env:
           BIZON_TOKEN: ${{ secrets.BIZON_TOKEN }}
