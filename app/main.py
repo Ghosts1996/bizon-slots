@@ -63,7 +63,21 @@ def build(now: datetime) -> dict:
 LABEL_RE = re.compile(r"(сегодня|завтра)\D*(\d{1,2}):(\d{2})", re.IGNORECASE)
 
 
+MSG_OK = ("✅ Готово, вы записаны: {text}.\n\n"
+          "За час до начала пришлю напоминание, а за 5 минут — ссылку на эфир прямо сюда.")
+MSG_BAD = "Это время уже недоступно 🙈 Выберите другое 👇"
+
+
 def resolve(text: str, now: datetime) -> dict:
+    r = _resolve(text, now)
+    r["msg"] = MSG_OK.format(text=r["text"]) if r.get("valid") else MSG_BAD
+    for k in ("text", "date", "time", "ts", "time_utc", "seconds_left",
+              "remind_60", "delay_60", "delay_7", "room_url"):
+        r.setdefault(k, "" if k in ("text", "date", "time", "time_utc", "room_url") else 0)
+    return r
+
+
+def _resolve(text: str, now: datetime) -> dict:
     m = LABEL_RE.search(text or "")
     if not m:
         return {"valid": 0, "reason": "bad_text"}

@@ -57,3 +57,10 @@ def test_resolve_by_ts():
     ts = build(t(13))["bts1"]
     assert resolve_ts(ts, t(13, 30))["valid"] == 1
     assert resolve_ts(ts, t(14, 0, 1))["valid"] == 0
+
+
+def test_resolve_msg_fields():
+    ok = resolve("Завтра 14:00 по МСК", t(22))
+    assert ok["valid"] == 1 and "вы записаны" in ok["msg"] and ok["room_url"]
+    bad = resolve("ерунда", t(22))
+    assert bad["valid"] == 0 and bad["msg"] and bad["delay_7"] == 0
