@@ -37,7 +37,7 @@ jobs:
           host: ${{ secrets.VDS_HOST }}
           username: ${{ secrets.VDS_USER }}
           password: ${{ secrets.VDS_PASSWORD }}
-          envs: BIZON_TOKEN,SMTP_USER,SMTP_PASS,REPORT_TO,ALERT_TO
+          envs: BIZON_TOKEN,SMTP_USER,SMTP_PASS,SMTP_HOST,REPORT_TO,ALERT_TO
           command_timeout: 20m
           script: |
             err() { echo "::error::$*"; }
@@ -59,6 +59,16 @@ jobs:
             {
               printf 'BIZON_TOKEN=%s\n' "$BIZON_TOKEN"
               printf 'SMTP_USER=%s\nSMTP_PASS=%s\n' "$SMTP_USER" "$SMTP_PASS"
+              # хост по адресу ящика: gmail / mail.ru / yandex
+              H="$SMTP_HOST"
+              if [ -z "$H" ]; then
+                case "$SMTP_USER" in
+                  *@gmail.com) H=smtp.gmail.com ;;
+                  *@mail.ru|*@bk.ru|*@inbox.ru|*@list.ru) H=smtp.mail.ru ;;
+                  *) H=smtp.yandex.ru ;;
+                esac
+              fi
+              printf 'SMTP_HOST=%s\n' "$H"
               printf 'REPORT_TO=%s\nALERT_TO=%s\n' "$REPORT_TO" "$ALERT_TO"
             } > /opt/bizon-slots/.env
             umask 022
@@ -82,5 +92,6 @@ jobs:
           BIZON_TOKEN: ${{ secrets.BIZON_TOKEN }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
           REPORT_TO: ${{ secrets.REPORT_TO }}
           ALERT_TO: ${{ secrets.ALERT_TO }}
