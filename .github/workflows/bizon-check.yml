@@ -15,18 +15,10 @@ jobs:
           envs: BIZON_TOKEN
           script: |
             echo "::notice::token len=${#BIZON_TOKEN} hash=$(printf %s "$BIZON_TOKEN" | sha256sum | cut -c1-8)"
-            L=http://127.0.0.1:8088
-            echo "::notice::health $(curl -sS $L/health) $(date '+%H:%M %Z')"
-            python3 - <<'PY'
-            import sqlite3, datetime
-            con = sqlite3.connect('/opt/bizon-slots/data.db')
-            tz = datetime.timezone(datetime.timedelta(hours=3))
-            f = lambda t: datetime.datetime.fromtimestamp(t, tz).strftime('%d.%m %H:%M')
-            for cid, ts, reg in con.execute('select client_id, ts, reg_at from reg'):
-                print(f"::notice::reg client={cid[:4]}*** slot={f(ts)} registered={f(reg)}")
-            for cid, ts, step in con.execute('select client_id, ts, step from sent'):
-                print(f"::notice::sent client={cid[:4]}*** slot={f(ts)} step={step}")
-            PY
-            echo "::notice::journal $(journalctl -u bizon-slots --since '-3h' --no-pager | grep -E 'GET /(resolve|due|visited)' | tail -8 | sed -E 's/client_id=[^& ]+/client_id=***/g' | tr '\n' ' ' | cut -c1-900)"
+            echo "::notice::dns $(getent ahosts api.telegram.org | awk '{print $1}' | sort -u | tr '\n' ' ')"
+            echo "::notice::v4 $(curl -4 -sS -o /dev/null -w '%{http_code} %{time_total}s' --max-time 15 https://api.telegram.org/ 2>&1 | tail -1)"
+            echo "::notice::v6 $(curl -6 -sS -o /dev/null -w '%{http_code}' --max-time 10 https://api.telegram.org/ 2>&1 | tail -1)"
+            echo "::notice::ip4 $(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 --resolve api.telegram.org:443:149.154.167.220 https://api.telegram.org/ 2>&1 | tail -1)"
+            echo "::notice::google $(curl -4 -sS -o /dev/null -w '%{http_code}' --max-time 10 https://www.google.com/ 2>&1 | tail -1)"
         env:
           BIZON_TOKEN: ${{ secrets.BIZON_TOKEN }}
