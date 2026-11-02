@@ -1,16 +1,14 @@
 """Отчёты по автовебинару и сторож. Доставка — Telegram-бот.
 
-Подписка по ссылкам:
-  t.me/<бот>?start=report — ежедневный и недельный отчёт
-  t.me/<бот>?start=alert  — то же + уведомления о сбоях
-
-Команды в боте: /today, /yesterday, /week, /help, /stop
+Доступ — только по приглашению (см. раздел «Доступы»). Первый вход владельца —
+по ссылке из `python -m app.report links`, дальше владелец/админы приглашают
+людей кнопкой «👥 Доступы» в боте.
 
 python -m app.report daily [--dry]   — отчёт за вчера (по понедельникам + неделя)
 python -m app.report watchdog        — проверка токена Бизона
 python -m app.report serve           — бот: подписки, меню и кнопки (постоянно)
 python -m app.report test            — тестовое сообщение подписчикам
-python -m app.report links           — ссылки для подписки
+python -m app.report links           — ссылка первого входа владельца
 """
 import html
 import json
@@ -228,6 +226,7 @@ def tg(method: str, _http_timeout: int = 30, **params) -> dict:
 
 # Постоянное меню внизу чата — чтобы не вспоминать команды
 BTN_TODAY, BTN_YESTERDAY, BTN_WEEK, BTN_HELP = "📊 Сегодня", "🗓 Вчера", "📈 Неделя", "ℹ️ Помощь"
+BTN_ACCESS = "👥 Доступы"
 MENU = {"keyboard": [[{"text": BTN_TODAY}, {"text": BTN_YESTERDAY}],
                      [{"text": BTN_WEEK}, {"text": BTN_HELP}]],
         "resize_keyboard": True, "is_persistent": True,
@@ -281,20 +280,6 @@ def send_mail(to: str, subject: str, body: str) -> None:
         smtp.send_message(msg)
 
 
-def subs_table(con):
-    con.execute("create table if not exists tg_subs (chat_id text, role text, name text, "
-                "primary key (chat_id, role))")
-    con.execute("create table if not exists kv (k text primary key, v text)")
-
-
-def recipients(role: str) -> list:
-    with db() as con:
-        subs_table(con)
-        roles = ("report", "alert") if role == "report" else ("alert",)
-        q = "select distinct chat_id from tg_subs where role in (%s)" % ",".join("?" * len(roles))
-        return [r[0] for r in con.execute(q, roles)]
-
-
 def notify(role: str, subject: str, body_html: str, markup: dict | None = None) -> int:
     """role: report — всем подписчикам; alert — только подписанным на тревоги."""
     sent = 0
@@ -312,7 +297,147 @@ def notify(role: str, subject: str, body_html: str, markup: dict | None = None) 
     return sent
 
 
-# --- Бот: подписка, меню и кнопки ---------------------------------------------
+# --- Доступы ------------------------------------------------------------------
+#
+# Роли: owner — владелец (тех. поддержка, получает уведомления о сбоях),
+#       admin — управляет доступом и видит отчёты,
+#       viewer — только смотрит отчёты.
+# Попасть в бот можно только по одноразовой ссылке-приглашению (24 часа)
+# или по запросу, который одобрил админ.
+
+ROLE_NAMES = {"owner": "👑 Владелец", "admin": "🛡 Админ", "viewer": "👁 Просмотр"}
+INVITE_TTL = 24 * 3600
+
+
+def acl_tables(con):
+    con.execute("create table if not exists tg_users (chat_id text primary key, role text, "
+                "alerts integer, label text, added_at integer)")
+    con.execute("create table if not exists tg_invites (code text primary key, role text, "
+                "created_by text, expires integer, used_by text)")
+    con.execute("create table if not exists tg_requests (chat_id text primary key, label text, "
+                "created integer)")
+    con.execute("create table if not exists kv (k text primary key, v text)")
+
+
+def subs_table(con):  # совместимость со старым именем
+    acl_tables(con)
+
+
+def get_user(con, cid: str):
+    row = con.execute("select role, alerts, label from tg_users where chat_id = ?", (cid,)).fetchone()
+    return {"role": row[0], "alerts": row[1], "label": row[2]} if row else None
+
+
+def is_admin(u) -> bool:
+    return bool(u) and u["role"] in ("owner", "admin")
+
+
+def add_user(con, cid: str, role: str, label: str) -> None:
+    alerts = 1 if role == "owner" else 0
+    con.execute("insert or replace into tg_users values (?, ?, ?, ?, ?)",
+                (cid, role, alerts, label, int(time.time())))
+    con.execute("delete from tg_requests where chat_id = ?", (cid,))
+
+
+def label_of(frm: dict) -> str:
+    """Как показать человека в списке доступов: @username или ID."""
+    return f"@{frm['username']}" if frm.get("username") else f"ID {frm.get('id')}"
+
+
+def new_code() -> str:
+    import secrets
+    return secrets.token_urlsafe(9).replace("-", "x").replace("_", "y")
+
+
+def bot_username() -> str:
+    with db() as con:
+        acl_tables(con)
+        row = con.execute("select v from kv where k = 'bot_username'").fetchone()
+        if row:
+            return row[0]
+        name = tg("getMe")["result"]["username"]
+        con.execute("insert or replace into kv values ('bot_username', ?)", (name,))
+        return name
+
+
+def create_invite(con, role: str, by: str) -> str:
+    code = new_code()
+    con.execute("insert into tg_invites values (?, ?, ?, ?, null)",
+                (code, role, by, int(time.time()) + INVITE_TTL))
+    return code
+
+
+def owner_link() -> str:
+    """Ссылка для первого входа владельца. Работает, пока владельца нет."""
+    with db() as con:
+        acl_tables(con)
+        if con.execute("select 1 from tg_users where role = 'owner'").fetchone():
+            return "владелец уже назначен"
+        row = con.execute("select v from kv where k = 'owner_code'").fetchone()
+        code = row[0] if row else new_code()
+        con.execute("insert or replace into kv values ('owner_code', ?)", (code,))
+    return f"https://t.me/{bot_username()}?start=own_{code}"
+
+
+def recipients(role: str) -> list:
+    """report — все, у кого есть доступ; alert — только с включёнными уведомлениями о сбоях."""
+    with db() as con:
+        acl_tables(con)
+        q = "select chat_id from tg_users" + (" where alerts = 1" if role == "alert" else "")
+        return [r[0] for r in con.execute(q)]
+
+
+def access_view(con, viewer_cid: str) -> tuple:
+    users = con.execute("select chat_id, role, label from tg_users order by "
+                        "case role when 'owner' then 0 when 'admin' then 1 else 2 end, added_at").fetchall()
+    L = ["<b>👥 Доступ к отчётам</b>", ""]
+    kb = []
+    for cid, role, label in users:
+        me = " · <i>вы</i>" if cid == viewer_cid else ""
+        L.append(f"{ROLE_NAMES[role]} — {html.escape(label)}{me}")
+        if role != "owner" and cid != viewer_cid:
+            kb.append([{"text": f"🗑 Убрать {label}", "callback_data": f"rm:{cid}"}])
+    pending = con.execute("select count(*) from tg_requests").fetchone()[0]
+    if pending:
+        L += ["", f"🙋 Ожидают одобрения: {pending}"]
+    L += ["", "Приглашение — одноразовая ссылка, действует 24 часа."]
+    kb.append([{"text": "➕ Пригласить для просмотра", "callback_data": "inv:viewer"}])
+    kb.append([{"text": "➕ Пригласить админа", "callback_data": "inv:admin"}])
+    return "\n".join(L), {"inline_keyboard": kb}
+
+
+def notify_admins(text: str, markup: dict | None = None, except_cid: str = "") -> None:
+    with db() as con:
+        acl_tables(con)
+        admins = [r[0] for r in con.execute("select chat_id from tg_users where role in ('owner','admin')")]
+    for cid in admins:
+        if cid != except_cid:
+            try:
+                tg_send(cid, text, markup)
+            except Exception:
+                pass
+
+
+def menu_for(u) -> dict:
+    rows = [[{"text": BTN_TODAY}, {"text": BTN_YESTERDAY}],
+            [{"text": BTN_WEEK}, {"text": BTN_HELP}]]
+    if is_admin(u):
+        rows.append([{"text": BTN_ACCESS}])
+    return {"keyboard": rows, "resize_keyboard": True, "is_persistent": True,
+            "input_field_placeholder": "Выберите отчёт 👇"}
+
+
+def welcome(cid: str, u) -> None:
+    lines = [f"✅ <b>Доступ открыт.</b> Ваша роль: {ROLE_NAMES[u['role']]}"]
+    if u["role"] == "owner":
+        lines.append("🔔 Сюда же придут уведомления, если что-то сломается.")
+    if is_admin(u):
+        lines.append(f"Кнопка «{BTN_ACCESS}» — кто видит отчёты, приглашения и запросы.")
+    tg_send(cid, "\n".join(lines) + "\n\n" + HELP, menu_for(u))
+    tg_send(cid, *day_view(datetime.now(MSK) - timedelta(days=1)))
+
+
+# --- Бот: меню, кнопки, приглашения -------------------------------------------
 
 HELP = ("<b>👋 Бот отчётов автовебинара</b>\n\n"
         "🕘 Каждое утро в 9:00 присылаю итоги за вчера.\n"
@@ -321,8 +446,11 @@ HELP = ("<b>👋 Бот отчётов автовебинара</b>\n\n"
         f"{BTN_TODAY} — цифры на текущий момент\n"
         f"{BTN_YESTERDAY} — итоги за вчера\n"
         f"{BTN_WEEK} — итоги за 7 дней\n\n"
-        "Под отчётами можно листать дни ◀️ ▶️ и сразу открыть Бизон или Сейлбот.\n\n"
-        "Отписаться — /stop")
+        "Под отчётами можно листать дни ◀️ ▶️ и сразу открыть Бизон или Сейлбот.")
+
+LOCKED = ("🔒 <b>Отчёты автовебинара — доступ по приглашению.</b>\n\n"
+          "Если вы из команды, нажмите кнопку ниже — администратор получит запрос "
+          "и откроет доступ.")
 
 
 def day_view(day: datetime) -> tuple:
@@ -344,6 +472,112 @@ def parse_day(s: str) -> datetime:
     return datetime(d.year, d.month, d.day, 12, tzinfo=MSK)
 
 
+def setup_bot() -> None:
+    tg("setMyCommands", commands=json.dumps([
+        {"command": "today", "description": "📊 Цифры за сегодня"},
+        {"command": "yesterday", "description": "🗓 Итоги за вчера"},
+        {"command": "week", "description": "📈 Итоги за неделю"},
+        {"command": "help", "description": "ℹ️ Что умеет бот"}]))
+    tg("setMyShortDescription",
+       short_description="Отчёты по автовебинару: записи, доходимость, досмотры. Доступ по приглашению.")
+    tg("setMyDescription", description=(
+        "Каждое утро присылаю итоги автовебинара: сколько записалось, пришло и досмотрело.\n\n"
+        "🔒 Доступ только по приглашению администратора."))
+
+
+def on_start(con, cid: str, arg: str, frm: dict) -> tuple:
+    """Обработка /start с параметром. Возвращает действие для ответа."""
+    u = get_user(con, cid)
+    if arg.startswith("own_"):
+        row = con.execute("select v from kv where k = 'owner_code'").fetchone()
+        has_owner = con.execute("select 1 from tg_users where role = 'owner'").fetchone()
+        if row and not has_owner and arg[4:] == row[0]:
+            add_user(con, cid, "owner", label_of(frm))
+            con.execute("delete from kv where k = 'owner_code'")
+            return ("welcome", cid)
+        return ("expired", cid)
+    if arg.startswith("inv_"):
+        inv = con.execute("select role, created_by, expires, used_by from tg_invites where code = ?",
+                          (arg[4:],)).fetchone()
+        if not inv or inv[3] or inv[2] < time.time():
+            return ("welcome", cid) if u else ("expired", cid)
+        role, by = inv[0], inv[1]
+        if u and u["role"] in ("owner", "admin") and role == "viewer":
+            return ("welcome", cid)  # не понижаем админа по старой ссылке
+        con.execute("update tg_invites set used_by = ? where code = ?", (cid, arg[4:]))
+        add_user(con, cid, role if not u or u["role"] != "owner" else "owner", label_of(frm))
+        return ("joined", (cid, by, label_of(frm), role))
+    return ("welcome", cid) if u else ("locked", cid)
+
+
+def process(updates: list, con) -> list:
+    """Разбирает пачку обновлений. Все изменения доступа — здесь, ответы — потом."""
+    todo = []
+    for upd in updates:
+        if upd.get("callback_query"):
+            q = upd["callback_query"]
+            cid = str(q.get("message", {}).get("chat", {}).get("id"))
+            data, u = q.get("data") or "", get_user(con, cid)
+            if data == "req":
+                if u:
+                    todo.append(("cbmsg", (q, "У вас уже есть доступ")))
+                    continue
+                frm = q.get("from") or {}
+                fresh = not con.execute("select 1 from tg_requests where chat_id = ?", (cid,)).fetchone()
+                con.execute("insert or replace into tg_requests values (?, ?, ?)",
+                            (cid, label_of(frm), int(time.time())))
+                todo.append(("requested", (q, cid, label_of(frm), fresh)))
+            elif not u:
+                todo.append(("cbmsg", (q, "Нет доступа")))
+            elif data.startswith(("ok:", "no:", "rm:", "inv:")) and not is_admin(u):
+                todo.append(("cbmsg", (q, "Это может только админ")))
+            elif data.startswith(("ok:", "no:")):
+                parts = data.split(":")
+                target, role = parts[1], (parts[2] if len(parts) > 2 else "")
+                req = con.execute("select label from tg_requests where chat_id = ?", (target,)).fetchone()
+                if not req:
+                    todo.append(("cbmsg", (q, "Запрос уже обработан")))
+                    continue
+                if data.startswith("ok:"):
+                    add_user(con, target, role, req[0])
+                else:
+                    con.execute("delete from tg_requests where chat_id = ?", (target,))
+                todo.append(("decided", (q, target, req[0], role if data.startswith("ok:") else "")))
+            elif data.startswith("rm:"):
+                target = data[3:]
+                t = get_user(con, target)
+                if t and t["role"] != "owner":
+                    con.execute("delete from tg_users where chat_id = ?", (target,))
+                    todo.append(("removed", (q, cid, target, t["label"])))
+                else:
+                    todo.append(("cbmsg", (q, "Нельзя удалить")))
+            elif data.startswith("inv:"):
+                role = data[4:] if data[4:] in ("viewer", "admin") else "viewer"
+                todo.append(("invite", (q, cid, create_invite(con, role, cid), role)))
+            elif data == "acc":
+                todo.append(("access", (q, cid)))
+            else:
+                todo.append(("cb", q))
+            continue
+        m = upd.get("message") or {}
+        text, chat = (m.get("text") or "").strip(), m.get("chat") or {}
+        if not chat or chat.get("type") != "private":
+            continue
+        cid, frm = str(chat["id"]), m.get("from") or {}
+        if text.startswith("/start"):
+            parts = text.split()
+            todo.append(on_start(con, cid, parts[1] if len(parts) > 1 else "", frm))
+            continue
+        u = get_user(con, cid)
+        if not u:
+            todo.append(("locked", cid))
+        elif text == BTN_ACCESS and is_admin(u):
+            todo.append(("access_msg", cid))
+        else:
+            todo.append(("text", (cid, text)))
+    return todo
+
+
 def handle_text(cid: str, text: str) -> None:
     now = datetime.now(MSK)
     if text in (BTN_TODAY, "/today"):
@@ -353,7 +587,10 @@ def handle_text(cid: str, text: str) -> None:
     elif text in (BTN_WEEK, "/week"):
         tg_send(cid, *week_view(now - timedelta(days=1)))
     else:
-        tg_send(cid, HELP, MENU)
+        with db() as con:
+            acl_tables(con)
+            u = get_user(con, cid)
+        tg_send(cid, HELP, menu_for(u))
 
 
 def handle_callback(q: dict) -> None:
@@ -367,76 +604,97 @@ def handle_callback(q: dict) -> None:
             return
         text, markup = day_view(day) if kind == "d" else week_view(day)
         tg("answerCallbackQuery", callback_query_id=q["id"], text="⏳ Обновляю…")
-        try:
-            tg("editMessageText", chat_id=cid, message_id=mid, text=text, parse_mode="HTML",
-               disable_web_page_preview="true", reply_markup=json.dumps(markup))
-        except Exception:
-            pass  # «message is not modified» — цифры не изменились
+        edit(cid, mid, text, markup)
     except Exception:
         tg("answerCallbackQuery", callback_query_id=q["id"], text="Не получилось, попробуйте ещё раз")
 
 
-def setup_bot() -> None:
-    tg("setMyCommands", commands=json.dumps([
-        {"command": "today", "description": "📊 Цифры за сегодня"},
-        {"command": "yesterday", "description": "🗓 Итоги за вчера"},
-        {"command": "week", "description": "📈 Итоги за неделю"},
-        {"command": "help", "description": "ℹ️ Что умеет бот"},
-        {"command": "stop", "description": "Отписаться"}]))
-    tg("setMyShortDescription",
-       short_description="Ежедневные отчёты по автовебинару: записи, доходимость, досмотры.")
-    tg("setMyDescription", description=(
-        "Присылаю итоги автовебинара каждое утро: сколько записалось, пришло и досмотрело. "
-        "Подписка — по персональной ссылке."))
+def edit(cid, mid, text: str, markup: dict | None) -> None:
+    try:
+        tg("editMessageText", chat_id=cid, message_id=mid, text=text, parse_mode="HTML",
+           disable_web_page_preview="true", reply_markup=json.dumps(markup or {"inline_keyboard": []}))
+    except Exception:
+        pass  # «message is not modified»
 
 
-def process(updates: list, con) -> list:
-    """Разбирает пачку обновлений: подписки и действия. Возвращает задачи на ответ."""
-    subs = {r[0] for r in con.execute("select chat_id from tg_subs")}
-    todo = []
-    for u in updates:
-        if u.get("callback_query"):
-            q = u["callback_query"]
-            if str(q.get("message", {}).get("chat", {}).get("id")) in subs:
-                todo.append(("cb", q))
-            continue
-        m = u.get("message") or {}
-        text, chat = (m.get("text") or "").strip(), m.get("chat") or {}
-        if not chat:
-            continue
-        cid, name = str(chat["id"]), ""
-        parts = text.split()
-        role = parts[1] if text.startswith("/start") and len(parts) > 1 else ""
-        if role in ("report", "alert"):
-            con.execute("insert or replace into tg_subs values (?, ?, ?)", (cid, role, name))
-            subs.add(cid)
-            todo.append(("welcome", (cid, role, name)))
-        elif text.startswith("/stop"):
-            con.execute("delete from tg_subs where chat_id = ?", (cid,))
-            subs.discard(cid)
-            todo.append(("bye", cid))
-        elif cid in subs:
-            todo.append(("text", (cid, text)))
-        else:
-            todo.append(("stranger", cid))
-    return todo
+def refresh_access(q: dict, cid: str) -> None:
+    with db() as con:
+        acl_tables(con)
+        text, markup = access_view(con, cid)
+    edit(cid, q["message"]["message_id"], text, markup)
 
 
 def answer(todo: list) -> None:
     for kind, arg in todo:
         try:
             if kind == "welcome":
-                cid, role, _ = arg
-                extra = "\n🔔 Также сообщу, если что-то сломается." if role == "alert" else ""
-                tg_send(cid, f"✅ <b>Вы подписаны на отчёты.</b>{extra}\n\n{HELP}", MENU)
-                y = datetime.now(MSK) - timedelta(days=1)
-                tg_send(cid, *day_view(y))
-            elif kind == "bye":
-                tg_send(arg, "Вы отписались 👋 Чтобы вернуться — откройте ссылку подписки ещё раз.",
-                        {"remove_keyboard": True})
-            elif kind == "stranger":
-                tg_send(arg, "🔒 Это служебный бот отчётов. Для подписки используйте ссылку, "
-                             "которую вам прислали.")
+                with db() as con:
+                    acl_tables(con)
+                    u = get_user(con, arg)
+                welcome(arg, u)
+            elif kind == "joined":
+                cid, by, label, role = arg
+                with db() as con:
+                    acl_tables(con)
+                    u = get_user(con, cid)
+                welcome(cid, u)
+                tg_send(by, f"✅ По вашему приглашению подключился {html.escape(label)} — "
+                            f"{ROLE_NAMES[role]}.")
+            elif kind == "expired":
+                tg_send(arg, "⌛️ Ссылка уже использована или устарела.\n\n" + LOCKED,
+                        {"inline_keyboard": [[{"text": "🙋 Запросить доступ", "callback_data": "req"}]]})
+            elif kind == "locked":
+                tg_send(arg, LOCKED,
+                        {"inline_keyboard": [[{"text": "🙋 Запросить доступ", "callback_data": "req"}]]})
+            elif kind == "requested":
+                q, cid, label, fresh = arg
+                tg("answerCallbackQuery", callback_query_id=q["id"], text="Запрос отправлен ✅")
+                edit(cid, q["message"]["message_id"],
+                     "📨 <b>Запрос отправлен.</b>\nКак только администратор одобрит, я сразу напишу.", None)
+                if fresh:
+                    notify_admins(
+                        f"🙋 <b>Запрос доступа к отчётам</b>\nОт: {html.escape(label)}",
+                        {"inline_keyboard": [
+                            [{"text": "✅ Разрешить просмотр", "callback_data": f"ok:{cid}:viewer"}],
+                            [{"text": "🛡 Сделать админом", "callback_data": f"ok:{cid}:admin"},
+                             {"text": "❌ Отклонить", "callback_data": f"no:{cid}"}]]})
+            elif kind == "decided":
+                q, target, label, role = arg
+                verdict = f"✅ {html.escape(label)} — {ROLE_NAMES[role]}" if role else \
+                          f"❌ Запрос {html.escape(label)} отклонён"
+                tg("answerCallbackQuery", callback_query_id=q["id"], text="Готово")
+                edit(str(q["message"]["chat"]["id"]), q["message"]["message_id"], verdict, None)
+                if role:
+                    with db() as con:
+                        acl_tables(con)
+                        u = get_user(con, target)
+                    welcome(target, u)
+                else:
+                    tg_send(target, "К сожалению, в доступе отказано.")
+            elif kind == "removed":
+                q, cid, target, label = arg
+                tg("answerCallbackQuery", callback_query_id=q["id"], text=f"Доступ {label} убран")
+                refresh_access(q, cid)
+                tg_send(target, "🔒 Доступ к отчётам отключён.", {"remove_keyboard": True})
+            elif kind == "invite":
+                q, cid, code, role = arg
+                tg("answerCallbackQuery", callback_query_id=q["id"], text="Ссылка готова")
+                who = "админа" if role == "admin" else "для просмотра"
+                tg_send(cid, f"🔗 <b>Приглашение {who}</b>\n\n"
+                             f"https://t.me/{bot_username()}?start=inv_{code}\n\n"
+                             "Перешлите ссылку человеку. Она одноразовая и действует 24 часа.")
+            elif kind == "access":
+                q, cid = arg
+                tg("answerCallbackQuery", callback_query_id=q["id"])
+                refresh_access(q, cid)
+            elif kind == "access_msg":
+                with db() as con:
+                    acl_tables(con)
+                    text, markup = access_view(con, arg)
+                tg_send(arg, text, markup)
+            elif kind == "cbmsg":
+                q, text = arg
+                tg("answerCallbackQuery", callback_query_id=q["id"], text=text)
             elif kind == "cb":
                 handle_callback(arg)
             else:
@@ -448,22 +706,24 @@ def answer(todo: list) -> None:
 def poll(wait: int = 0) -> None:
     """Одна итерация: забрать обновления (wait — long polling, сек) и ответить."""
     with db() as con:
-        subs_table(con)
+        acl_tables(con)
         row = con.execute("select v from kv where k = 'tg_offset'").fetchone()
         offset = int(row[0]) if row else 0
-        if not con.execute("select 1 from kv where k = 'tg_setup_v2'").fetchone():
-            setup_bot()
-            con.execute("insert or replace into kv values ('tg_setup_v2', '1')")
+        need_setup = not con.execute("select 1 from kv where k = 'tg_setup_v3'").fetchone()
+    if need_setup:
+        setup_bot()
+        with db() as con:
+            con.execute("insert or replace into kv values ('tg_setup_v3', '1')")
     updates = tg("getUpdates", _http_timeout=wait + 15, offset=offset, timeout=wait,
                  allowed_updates=json.dumps(["message", "callback_query"])).get("result", [])
     if not updates:
         return
     with db() as con:
-        subs_table(con)
+        acl_tables(con)
         todo = process(updates, con)
-        new_offset = max(u["update_id"] for u in updates) + 1
-        con.execute("insert or replace into kv values ('tg_offset', ?)", (str(new_offset),))
-    answer(todo)  # отвечаем после сохранения offset — без повторов при сбое
+        con.execute("insert or replace into kv values ('tg_offset', ?)",
+                    (str(max(u["update_id"] for u in updates) + 1),))
+    answer(todo)  # отвечаем после сохранения — без повторов при сбое
 
 
 def serve() -> None:
@@ -530,7 +790,6 @@ if __name__ == "__main__":
         print("sent=%d" % notify("report", "Проверка связи",
                                  "🔔 <b>Проверка связи</b>\nОтчёты автовебинара будут приходить сюда."))
     elif cmd == "links":
-        me = tg("getMe")["result"]["username"]
-        print(f"https://t.me/{me}?start=report https://t.me/{me}?start=alert")
+        print(owner_link())
     else:
         print(__doc__)
