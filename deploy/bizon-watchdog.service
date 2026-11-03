@@ -5,4 +5,5 @@ Description=bizon-slots: сторож токена Бизона
 Type=oneshot
 WorkingDirectory=/opt/bizon-slots
 EnvironmentFile=-/opt/bizon-slots/.env
+EnvironmentFile=-/opt/bizon-slots/settings.env
 ExecStart=/opt/bizon-slots/venv/bin/python -m app.report watchdog

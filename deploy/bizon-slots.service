@@ -6,6 +6,7 @@ After=network.target
 WorkingDirectory=/opt/bizon-slots
 Environment=SLOTS=14,16,19,21
 EnvironmentFile=-/opt/bizon-slots/.env
+EnvironmentFile=-/opt/bizon-slots/settings.env
 ExecStart=/opt/bizon-slots/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8088
 Restart=always
 RestartSec=3
