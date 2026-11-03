@@ -119,3 +119,50 @@ def test_registered_for_moves(tmp_path, monkeypatch):
     with m.db() as con:
         assert registered_for(con, ts19) == {"a"}
         assert registered_for(con, ts21) == {"b"}
+
+
+def test_followup_again_then_record(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    clock = {"now": t(13)}
+    monkeypatch.setattr(m, "now_msk", lambda: clock["now"])
+
+    # первый пропуск 14:00 → снова выбор времени, без записи
+    ts1 = int(t(14).timestamp())
+    m.save_visit("c1", ts1, 0, 0, "none")
+    clock["now"] = t(15, 30)
+    r = m.followup("c1", False)
+    assert r["again"] == 1 and r["record"] == 0
+
+    # второй пропуск подряд → запись завтра в 10:00
+    ts2 = int(t(19).timestamp())
+    m.save_registration("c1", ts2, int(t(15, 31).timestamp()))
+    m.save_visit("c1", ts2, 0, 0, "none")
+    clock["now"] = t(20, 30)
+    r = m.followup("c1", False)
+    assert r["again"] == 0 and r["record"] == 1
+    assert r["delay_record"] == int((t(10, d=31) - t(20, 30)).total_seconds())
+
+    # утром запись уходит один раз
+    assert m.claim_step("c1", "record", int(t(10, d=31).timestamp())) == ts2
+    assert m.claim_step("c1", "record", int(t(10, 1, d=31).timestamp())) is None
+
+
+def test_followup_resets_after_visit(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    m.save_visit("c2", int(t(14).timestamp()), 0, 0, "none")
+    m.save_visit("c2", int(t(16).timestamp()), 1, 70, "full")
+    m.save_visit("c2", int(t(19).timestamp()), 0, 0, "none")
+    assert m.followup("c2", False)["again"] == 1
+    assert m.followup("c2", True) == {}
+
+
+def test_record_skipped_after_reregistration(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    ts = int(t(19).timestamp())
+    m.save_registration("c3", ts, int(t(12).timestamp()))
+    # человек сам записался заново на завтра — утренняя запись не нужна
+    m.save_registration("c3", int(t(14, d=31).timestamp()), int(t(21).timestamp()))
+    assert m.claim_step("c3", "record", int(t(10, d=31).timestamp())) is None

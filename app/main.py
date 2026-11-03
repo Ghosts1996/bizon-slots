@@ -180,12 +180,44 @@ def check_visit(client_id: str, ts: int) -> dict:
         minutes = round(sum(watched_minutes(v) for v in hit), 1)
         seg = segment(bool(hit), minutes)
         save_visit(client_id, int(ts), int(bool(hit)), minutes, seg)
-        return {"ready": 1, "visited": int(bool(hit)), "webinar_id": webinar_id,
+        return {**NO_FOLLOWUP, **followup(client_id, bool(hit)),
+                "ready": 1, "visited": int(bool(hit)), "webinar_id": webinar_id,
                 "minutes": minutes, "segment": seg,
                 "seg_early": int(seg == "early"), "seg_left": int(seg == "left"),
                 "seg_full": int(seg == "full")}
     except Exception as e:  # сеть/токен — бот получит ready=0 и проверит позже
-        return {"ready": 0, "visited": 0, "webinar_id": webinar_id, "error": str(e)[:200]}
+        return {**NO_FOLLOWUP, "ready": 0, "visited": 0, "webinar_id": webinar_id,
+                "error": str(e)[:200]}
+
+
+# Догон для тех, кто не пришёл:
+#   1-й пропуск — сразу после эфира снова предлагаем выбрать время (again=1);
+#   2-й пропуск подряд — на следующее утро отправляем запись (record=1).
+# Флаги ставятся только когда отчёт Бизона готов, поэтому ложных «не пришёл» нет.
+RECORD_HOUR = int(os.getenv("RECORD_HOUR", "10"))
+NO_FOLLOWUP = {"miss": 0, "again": 0, "record": 0, "delay_record": 0}
+
+
+def misses_in_row(client_id: str) -> int:
+    with _lock, db() as con:
+        last_seen = con.execute("select coalesce(max(ts), 0) from visits "
+                                "where client_id = ? and visited = 1", (client_id,)).fetchone()[0]
+        return con.execute("select count(*) from visits where client_id = ? and visited = 0 "
+                           "and ts > ?", (client_id, last_seen)).fetchone()[0]
+
+
+def record_at(check_ts: int) -> int:
+    day = datetime.fromtimestamp(check_ts, MSK) + timedelta(days=1)
+    return int(at(day, RECORD_HOUR).timestamp())
+
+
+def followup(client_id: str, visited: bool) -> dict:
+    if visited:
+        return {}
+    miss = misses_in_row(client_id)
+    now_ts = int(now_msk().timestamp())
+    return {"miss": miss, "again": int(miss == 1), "record": int(miss >= 2),
+            "delay_record": max(record_at(now_ts) - now_ts, 0)}
 
 
 @app.get("/visited")
@@ -193,7 +225,7 @@ def visited_endpoint(client_id: str = Query(...), ts: int = Query(None)):
     real_ts = claim_step(client_id, "check", int(now_msk().timestamp()))
     if real_ts is None:
         # устаревшая цепочка или повтор — обе ветки (visited 1/0) не сработают
-        return {"ready": 0, "visited": -1, "minutes": 0, "segment": "",
+        return {**NO_FOLLOWUP, "ready": 0, "visited": -1, "minutes": 0, "segment": "",
                 "seg_early": 0, "seg_left": 0, "seg_full": 0}
     return check_visit(client_id, real_ts)
 
@@ -236,6 +268,8 @@ def expected_at(step: str, ts: int, reg_at: int) -> int:
         return max(reg_at, ts - 300)
     if step == "check":
         return max(reg_at, ts - 300) + 95 * 60
+    if step == "record":
+        return record_at(expected_at("check", ts, reg_at))
     raise ValueError(step)
 
 
@@ -260,11 +294,14 @@ LINK_TEXT = ("🎬 Через 5 минут встречаемся!\nЖмите �
 
 
 @app.get("/due")
-def due_endpoint(client_id: str = Query(...), step: str = Query(..., pattern="^(hour|link)$")):
+def due_endpoint(client_id: str = Query(...), step: str = Query(..., pattern="^(hour|link|record)$")):
     now = now_msk()
     ts = claim_step(client_id, step, int(now.timestamp()))
     if ts is None:
         return {"ok": 0, "text": ""}
+    if step == "record":
+        # текст и ссылка на запись живут в блоке Сейлбота, чтобы их можно было править без меня
+        return {"ok": 1, "text": ""}
     s = datetime.fromtimestamp(ts, MSK)
     left = ts - int(now.timestamp())
     head = "Через час встречаемся!" if left > 50 * 60 else "Совсем скоро начинаем!"
