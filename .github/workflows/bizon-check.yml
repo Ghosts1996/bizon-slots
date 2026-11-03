@@ -23,10 +23,18 @@ jobs:
             from app import report as r
             try:
                 con = db(); r.acl_tables(con)
-                print("USERS", [(c[-4:], role, label, a) for c, role, label, a in con.execute("select chat_id, role, label, alerts from tg_users")])
-                print("REQ", con.execute("select * from tg_requests").fetchall()[-5:])
-                print("INV", con.execute("select role, used_by is not null, expires > strftime('%s','now') from tg_invites").fetchall()[-5:])
-                print("KV", [k for k, in con.execute("select k from kv")])
+                print("USERS", [(c[-4:], role, label) for c, role, label in con.execute("select chat_id, role, label from tg_users")])
+                print("REQ", con.execute("select * from tg_requests").fetchall()[-3:])
+                ts = 1793710800
+                print("REG", con.execute("select ts, reg_at from reg").fetchall()[-2:])
+                print("SENT16", con.execute("select step from sent where ts = ?", (ts,)).fetchall())
+                print("VIS16", con.execute("select client_id, visited, minutes, segment from visits where ts = ?", (ts,)).fetchall())
+                st = datetime.datetime.fromtimestamp(ts, MSK)
+                vs = r.session_viewers(f"{r.ROOM_ID}*{st:%Y-%m-%dT%H:%M:00}")
+                print("VIEWERS16", [(v.get("username"), str(v.get("url"))[-25:], round(r.watched_minutes(v), 1)) for v in vs])
+                r._chat_cache.clear()
+                ch = r.session_chat(st)
+                print("CHAT16", len(ch), [(m["name"], m["text"][:40]) for m in ch[:8]])
             except Exception:
                 traceback.print_exc()
             PY
