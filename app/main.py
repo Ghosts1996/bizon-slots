@@ -167,6 +167,7 @@ def resolve_endpoint(text: str = Query(None, description="Текст нажат�
 
 BIZON_API = "https://online.bizon365.ru/api/v1"
 ROOM_ID = os.getenv("ROOM_ID", "209601:avtoweb")
+EMPTY_AFTER_MIN = int(os.getenv("EMPTY_AFTER_MIN", "80"))
 
 
 def bizon_get(path: str, params: dict) -> dict:
@@ -195,10 +196,13 @@ def check_visit(client_id: str, ts: int) -> dict:
     try:
         lst = bizon_get("webinars/reports/getlist", {"skip": 0, "limit": 50, "type": "AutoWebinars"})
         ready = any(w.get("webinarId") == webinar_id for w in lst.get("list") or [])
-        if not ready:
-            return {"ready": 0, "visited": 0, "webinar_id": webinar_id}
+        viewers = session_viewers(webinar_id)
+        # Бизон не заводит отчёт по сеансу, в который никто не зашёл. Если эфир
+        # давно закончился, а отчёта нет — значит, в комнате не было никого.
+        if not ready and not viewers and now_msk() < start + timedelta(minutes=EMPTY_AFTER_MIN):
+            return {**NO_FOLLOWUP, "ready": 0, "visited": 0, "webinar_id": webinar_id}
         needle = f"salebot={client_id}"
-        hit = [v for v in session_viewers(webinar_id)
+        hit = [v for v in viewers
                if needle in json.dumps(v, ensure_ascii=False)
                or str(v.get("salebot") or "") == str(client_id)]
         minutes = round(sum(watched_minutes(v) for v in hit), 1)

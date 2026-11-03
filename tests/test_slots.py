@@ -173,3 +173,15 @@ def test_msg_and_calendar():
     assert "📅 Завтра 31.10.2026 в 16:00 по МСК." in r["msg"]
     assert "dates=20261031T130000Z%2F20261031T143000Z" in r["cal_url"]
     assert resolve("Сегодня 14:00 по МСК", t(15))["cal_url"] == ""
+
+
+def test_empty_room_counts_as_missed(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setattr(m, "bizon_get", lambda path, params: {"list": [], "viewers": [], "total": 0})
+    ts = int(t(14).timestamp())
+    monkeypatch.setattr(m, "now_msk", lambda: t(14, 50))
+    assert m.check_visit("c9", ts)["ready"] == 0          # эфир ещё мог идти
+    monkeypatch.setattr(m, "now_msk", lambda: t(15, 30))
+    r = m.check_visit("c9", ts)
+    assert r["ready"] == 1 and r["visited"] == 0 and r["again"] == 1
