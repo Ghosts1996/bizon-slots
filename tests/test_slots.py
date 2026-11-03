@@ -166,3 +166,10 @@ def test_record_skipped_after_reregistration(tmp_path, monkeypatch):
     # человек сам записался заново на завтра — утренняя запись не нужна
     m.save_registration("c3", int(t(14, d=31).timestamp()), int(t(21).timestamp()))
     assert m.claim_step("c3", "record", int(t(10, d=31).timestamp())) is None
+
+
+def test_msg_and_calendar():
+    r = resolve("Завтра 16:00 по МСК", t(12))
+    assert "📅 Завтра 31.10.2026 в 16:00 по МСК." in r["msg"]
+    assert "dates=20261031T130000Z%2F20261031T143000Z" in r["cal_url"]
+    assert resolve("Сегодня 14:00 по МСК", t(15))["cal_url"] == ""

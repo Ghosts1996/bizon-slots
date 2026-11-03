@@ -68,17 +68,41 @@ def build(now: datetime) -> dict:
 LABEL_RE = re.compile(r"(сегодня|завтра)\D*(\d{1,2}):(\d{2})", re.IGNORECASE)
 
 
-MSG_OK = ("✅ Готово, вы записаны: {text}.\n\n"
-          "За час до начала пришлю напоминание, а за 5 минут — ссылку на эфир прямо сюда.")
+MSG_OK = ("✅ Готово, вы записаны!\n\n"
+          "📅 {day} {date} в {time} по МСК.\n\n"
+          "Чтобы точно ничего не пропустить:\n"
+          "🗓 добавьте семинар в календарь — кнопка ниже;\n"
+          "🔔 включите уведомления от этого чата.\n\n"
+          "За час до начала пришлю напоминание, а за 5 минут — ссылку на эфир.\n"
+          "Если планы изменятся, время можно поменять кнопкой ниже 👇")
+CAL_TITLE = os.getenv("CAL_TITLE", "Семинар «Как происходит развитие ребёнка»")
+CAL_MIN = int(os.getenv("CAL_MIN", "90"))
+
+
+def calendar_url(s: datetime) -> str:
+    """Ссылка «добавить в Google Календарь» — открывается и на телефоне, без сервера."""
+    fmt = "%Y%m%dT%H%M%SZ"
+    start = s.astimezone(timezone.utc)
+    end = start + timedelta(minutes=CAL_MIN)
+    q = urllib.parse.urlencode({
+        "action": "TEMPLATE", "text": CAL_TITLE,
+        "dates": f"{start:{fmt}}/{end:{fmt}}",
+        "details": "Ссылку на эфир пришлём в чат-бот за 5 минут до начала.",
+        "ctz": "Europe/Moscow"})
+    return f"https://calendar.google.com/calendar/render?{q}"
 MSG_BAD = "Это время уже недоступно 🙈 Выберите другое 👇"
 
 
 def resolve(text: str, now: datetime) -> dict:
     r = _resolve(text, now)
-    r["msg"] = MSG_OK.format(text=r["text"]) if r.get("valid") else MSG_BAD
-    for k in ("text", "date", "time", "ts", "time_utc", "seconds_left",
+    if r.get("valid"):
+        r["msg"] = MSG_OK.format(day=r["text"].split()[0], date=r["date"], time=r["time"])
+        r["cal_url"] = calendar_url(datetime.fromtimestamp(r["ts"], MSK))
+    else:
+        r["msg"] = MSG_BAD
+    for k in ("cal_url", "text", "date", "time", "ts", "time_utc", "seconds_left",
               "remind_60", "delay_60", "delay_7", "delay_5", "delay_gap", "remind_head", "room_url"):
-        r.setdefault(k, "" if k in ("text", "date", "time", "time_utc", "room_url", "remind_head") else 0)
+        r.setdefault(k, "" if k in ("cal_url", "text", "date", "time", "time_utc", "room_url", "remind_head") else 0)
     return r
 
 
