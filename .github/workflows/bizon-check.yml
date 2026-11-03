@@ -22,21 +22,14 @@ jobs:
             from app.main import db, MSK
             from app import report as r
             try:
-                from app.main import bizon_get
-                for wid in ["209601:avtoweb*2026-11-02T21:00:00", "209601:avtoweb*2026-11-03T14:00:00"]:
-                    try:
-                        d = bizon_get("webinars/reports/get", {"webinarId": wid})
-                    except Exception as e:
-                        print(wid[-8:], "ERR", str(e)[:120]); continue
-                    rep = d.get("report") or {}
-                    print(wid[-8:], "top", list(d.keys()), "rep", list(rep.keys()) if isinstance(rep, dict) else type(rep).__name__)
-                    if isinstance(rep, dict) and rep.get("report"):
-                        rr = json.loads(rep["report"])
-                        print(" RK", list(rr.keys()))
-                        for uk, m in list((rr.get("usersMeta") or {}).items())[:2]:
-                            print(" UM", uk, json.dumps(m, ensure_ascii=False)[:600])
-                        vs = r.session_viewers(wid)
-                        print(" VK", list(vs[0].keys()) if vs else None, json.dumps(vs[0], ensure_ascii=False)[:500] if vs else "")
+                y = datetime.datetime(2026, 11, 2, 12, tzinfo=MSK)
+                st = r.day_stats(y)
+                print(r.plain(r.render_day(st, None, "T")).split("По сеансам")[1])
+                print(r.plain(r.render_chat(y, st)))
+                con = db()
+                print("REG", con.execute("select ts, reg_at from reg").fetchall()[-3:])
+                print("SENT", con.execute("select ts, step from sent order by rowid desc limit 6").fetchall())
+                print("VIS", con.execute("select ts, visited, segment from visits order by rowid desc limit 4").fetchall())
             except Exception:
                 traceback.print_exc()
             PY
