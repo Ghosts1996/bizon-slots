@@ -1,0 +1,64 @@
+name: scn-fix
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          password: ${{ secrets.VDS_PASSWORD }}
+          script: |
+            cd /opt/video
+            python3 - <<'PY' > fix.txt 2>&1
+            import json
+            S = 396000  # 6:36 пропущено в начале видео
+            d = json.load(open("scn.json"))
+            items = d["data"]
+            print("POST0", json.dumps([i for i in items if i["action"] == "post"][0], ensure_ascii=False)[:300])
+            out, early, dropped = [], [], []
+            for it in items:
+                it = json.loads(json.dumps(it))
+                blob = json.dumps(it.get("data"), ensure_ascii=False)
+                if it["action"] == "post" and ("Нет звука" in blob or '"Есть!"' in blob):
+                    dropped.append(it["timeshift"]); continue
+                if it["action"] == "goOnline":
+                    out.append(it); continue
+                t = it["timeshift"] - S
+                if t < 3000:
+                    early.append(it)
+                else:
+                    it["timeshift"] = t
+                    out.append(it)
+            # приветствия, которые шли во время заставки: равномерно в первые полторы минуты
+            early.sort(key=lambda x: x["timeshift"])
+            for i, it in enumerate(early):
+                it["timeshift"] = 3000 + i * int(90000 / max(len(early), 1))
+                out.append(it)
+            out.sort(key=lambda x: x["timeshift"])
+            d["data"] = out
+            json.dump(d, open("scn_fixed.json", "w"), ensure_ascii=False)
+            fmt = lambda ms: f"{ms//60000}:{ms%60000/1000:06.3f}"
+            print("DROPPED", [fmt(t) for t in dropped], "EARLY", len(early), "TOTAL", len(items), "->", len(out))
+            for it in out:
+                if it["action"] != "post":
+                    print("CMD", it["action"], fmt(it["timeshift"]), json.dumps(it.get("data"), ensure_ascii=False)[:80])
+            print("LASTPOST", fmt(max(i["timeshift"] for i in out if i["action"] == "post")))
+            PY
+            echo "::notice::$(tr '\n' ' ' < fix.txt | cut -c1-3000)"
+      - name: fetch
+        run: |
+          sudo apt-get install -y -qq sshpass >/dev/null
+          sshpass -p "$PASS" scp -o StrictHostKeyChecking=no "$USER_@$HOST:/opt/video/scn_fixed.json" scn_fixed.json
+        env:
+          PASS: ${{ secrets.VDS_PASSWORD }}
+          USER_: ${{ secrets.VDS_USER }}
+          HOST: ${{ secrets.VDS_HOST }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scn
+          path: scn_fixed.json
