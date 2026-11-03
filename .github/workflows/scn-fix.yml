@@ -3,6 +3,9 @@ name: scn-fix
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   fix:
     runs-on: ubuntu-latest
@@ -23,8 +26,8 @@ jobs:
             out, early, dropped = [], [], []
             for it in items:
                 it = json.loads(json.dumps(it))
-                blob = json.dumps(it.get("data"), ensure_ascii=False)
-                if it["action"] == "post" and ("Нет звука" in blob or '"Есть!"' in blob):
+                msg = str(it.get("message") or "").strip()
+                if it["action"] == "post" and msg in ("Нет звука", "Есть!"):
                     dropped.append(it["timeshift"]); continue
                 if it["action"] == "goOnline":
                     out.append(it); continue
@@ -58,7 +61,13 @@ jobs:
           PASS: ${{ secrets.VDS_PASSWORD }}
           USER_: ${{ secrets.VDS_USER }}
           HOST: ${{ secrets.VDS_HOST }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: scn
-          path: scn_fixed.json
+      - name: publish
+        run: |
+          B64=$(base64 -w0 scn_fixed.json)
+          SHA=$(curl -s -H "Authorization: Bearer $GH" https://api.github.com/repos/${{ github.repository }}/contents/out/scn_fixed.json?ref=scn-out | python3 -c 'import sys,json;print(json.load(sys.stdin).get("sha",""))' || true)
+          curl -s -H "Authorization: Bearer $GH" https://api.github.com/repos/${{ github.repository }}/git/refs/heads/scn-out | grep -q '"ref"' || \
+            curl -s -X POST -H "Authorization: Bearer $GH" https://api.github.com/repos/${{ github.repository }}/git/refs -d "{\"ref\":\"refs/heads/scn-out\",\"sha\":\"${{ github.sha }}\"}" >/dev/null
+          printf '{"message":"scn","branch":"scn-out","content":"%s"%s}' "$B64" "${SHA:+,\"sha\":\"$SHA\"}" > body.json
+          curl -s -X PUT -H "Authorization: Bearer $GH" https://api.github.com/repos/${{ github.repository }}/contents/out/scn_fixed.json -d @body.json | head -c 200
+        env:
+          GH: ${{ secrets.GITHUB_TOKEN }}
