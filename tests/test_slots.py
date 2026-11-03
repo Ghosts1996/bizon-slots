@@ -82,9 +82,9 @@ def test_dedup_chain(tmp_path, monkeypatch):
     m.save_registration("c1", ts19, int(t(18, 7).timestamp()))
     # передумал и записался на завтра 16:00
     m.save_registration("c1", ts16, int(t(18, 20).timestamp()))
-    # старая цепочка 19:00: шаг "ссылка" в 18:55 — уже не актуален
+    # старая цепочка 19:00: шаг "ссылка" в 18:55 - уже не актуален
     assert m.claim_step("c1", "link", int(t(18, 55).timestamp())) is None
-    # новая цепочка: напоминание завтра в 15:00 — один раз
+    # новая цепочка: напоминание завтра в 15:00 - один раз
     assert m.claim_step("c1", "hour", int(t(15, 0, 30, d=31).timestamp())) == ts16
     assert m.claim_step("c1", "hour", int(t(15, 1, d=31).timestamp())) is None
     assert m.claim_step("c1", "link", int(t(15, 55, d=31).timestamp())) == ts16
@@ -163,7 +163,7 @@ def test_record_skipped_after_reregistration(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
     ts = int(t(19).timestamp())
     m.save_registration("c3", ts, int(t(12).timestamp()))
-    # человек сам записался заново на завтра — утренняя запись не нужна
+    # человек сам записался заново на завтра - утренняя запись не нужна
     m.save_registration("c3", int(t(14, d=31).timestamp()), int(t(21).timestamp()))
     assert m.claim_step("c3", "record", int(t(10, d=31).timestamp())) is None
 

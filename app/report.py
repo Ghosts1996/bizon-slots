@@ -1,14 +1,14 @@
-"""Отчёты по автовебинару и сторож. Доставка — Telegram-бот.
+"""Отчёты по автовебинару и сторож. Доставка - Telegram-бот.
 
-Доступ — только по приглашению (см. раздел «Доступы»). Первый вход владельца —
+Доступ - только по приглашению (см. раздел Доступы). Первый вход владельца -
 по ссылке из `python -m app.report links`, дальше владелец/админы приглашают
-людей кнопкой «👥 Доступы» в боте.
+людей кнопкой 👥 Доступы в боте.
 
-python -m app.report daily [--dry]   — отчёт за вчера (по понедельникам + неделя)
-python -m app.report watchdog        — проверка токена Бизона
-python -m app.report serve           — бот: подписки, меню и кнопки (постоянно)
-python -m app.report test            — тестовое сообщение подписчикам
-python -m app.report links           — ссылка первого входа владельца
+python -m app.report daily [--dry]   - отчёт за вчера (по понедельникам + неделя)
+python -m app.report watchdog        - проверка токена Бизона
+python -m app.report serve           - бот: подписки, меню и кнопки (постоянно)
+python -m app.report test            - тестовое сообщение подписчикам
+python -m app.report links           - ссылка первого входа владельца
 """
 import html
 import json
@@ -26,7 +26,6 @@ from email.message import EmailMessage
 from app.main import MSK, ROOM_ID, SLOTS, at, bizon_get, db, segment, session_viewers, watched_minutes
 
 STATE_DIR = os.getenv("STATE_DIR", "/opt/bizon-slots")
-WEBINAR_TITLE = os.getenv("WEBINAR_TITLE", "Как происходит развитие ребёнка")
 SEG = [("full", "🟢", "досмотрели до конца"),
        ("left", "🟡", "ушли до предложения"),
        ("early", "🔴", "смотрели меньше 15 минут")]
@@ -48,7 +47,7 @@ def registered_for(con, ts: int) -> set:
 
 
 def sync_visits(con, start: datetime, ts: int, regs: set) -> None:
-    """Сверяет записавшихся с отчётом Бизона сразу после эфира — не ждём проверки из бота."""
+    """Сверяет записавшихся с отчётом Бизона сразу после эфира - не ждём проверки из бота."""
     known = {r[0] for r in con.execute("select client_id from visits where ts = ?", (ts,))}
     todo = regs - known
     if not todo:
@@ -125,21 +124,21 @@ def human_day(d: datetime) -> str:
 
 
 def advice(st: dict) -> str:
-    """Короткий вывод по цифрам — чтобы не нужно было разбираться самому."""
+    """Короткий вывод по цифрам - чтобы не нужно было разбираться самому."""
     if st["reg"] == 0:
         return "Записей не было. Проверьте, идёт ли трафик в бота."
     tips = []
     if st["pct"] < 30:
-        tips.append("доходимость низкая — стоит усилить напоминания или прогрев перед эфиром")
+        tips.append("доходимость низкая - стоит усилить напоминания или прогрев перед эфиром")
     elif st["pct"] >= 50:
         tips.append("отличная доходимость")
     if st["came"] and st["segs"]["full"] / st["came"] >= 0.5:
-        tips.append("больше половины досматривают до конца — контент держит")
+        tips.append("больше половины досматривают до конца - контент держит")
     elif st["came"] and st["segs"]["early"] / st["came"] >= 0.4:
-        tips.append("многие смотрят меньше 15 минут — проверьте начало записи и время входа")
+        tips.append("многие смотрят меньше 15 минут - проверьте начало записи и время входа")
     top = max(st["slots"], key=lambda s: s["reg"])
     if top["reg"]:
-        tips.append(f"самое популярное время — {top['hour']:02d}:00")
+        tips.append(f"самое популярное время - {top['hour']:02d}:00")
     if not tips:
         return ""
     line = "; ".join(tips)
@@ -148,7 +147,7 @@ def advice(st: dict) -> str:
 
 def render_day(st: dict, prev: dict | None, title: str) -> str:
     e = html.escape
-    L = [f"<b>{title}</b>", f"<i>{e(WEBINAR_TITLE)}</i>", ""]
+    L = [f"<b>{title}</b>", ""]
     L.append(f"📝 Записались: <b>{st['reg']}</b>" + (delta(st["reg"], prev["reg"]) if prev else ""))
     L.append(f"👀 Пришли: <b>{st['came']}</b>" + (delta(st["came"], prev["came"]) if prev else ""))
     L.append(f"🎯 Доходимость: <b>{st['pct']}%</b>  {bar(st['came'], st['reg'])}"
@@ -162,7 +161,7 @@ def render_day(st: dict, prev: dict | None, title: str) -> str:
     L += ["", "<b>По сеансам</b>"]
     L.append("<code>время  запис. пришли  %")
     for s in st["slots"]:
-        p = f"{round(100 * s['came'] / s['reg'])}%" if s["reg"] else "—"
+        p = f"{round(100 * s['came'] / s['reg'])}%" if s["reg"] else "-"
         L.append(f"{s['hour']:02d}:00  {s['reg']:>5}  {s['came']:>6}  {p:>4}")
     L[-1] += "</code>"
     others = st["room"] - st["came"]
@@ -185,7 +184,7 @@ def render_week(end: datetime) -> str:
             by_hour[s["hour"]][1] += s["came"]
     top_reg = max((d["reg"] for d in days), default=0) or 1
     L = [f"<b>📅 Итоги недели</b>",
-         f"<i>{human_day(days[0]['day'])} — {human_day(days[-1]['day'])}</i>", "",
+         f"<i>{human_day(days[0]['day'])} - {human_day(days[-1]['day'])}</i>", "",
          f"📝 Записались: <b>{reg}</b>",
          f"👀 Пришли: <b>{came}</b>",
          f"🎯 Доходимость: <b>{round(100 * came / reg) if reg else 0}%</b>", "",
@@ -195,10 +194,10 @@ def render_week(end: datetime) -> str:
                  f"{d['reg']} / {d['came']}")
     L += ["", "<b>По времени</b>"]
     for h, (r, c) in by_hour.items():
-        L.append(f"{h:02d}:00 — записались {r}, пришли {c}"
+        L.append(f"{h:02d}:00 - записались {r}, пришли {c}"
                  + (f" ({round(100 * c / r)}%)" if r else ""))
     if best["came"]:
-        L += ["", f"🏆 Лучший день: {human_day(best['day'])} — пришли {best['came']}"]
+        L += ["", f"🏆 Лучший день: {human_day(best['day'])} - пришли {best['came']}"]
     return "\n".join(L)
 
 
@@ -240,13 +239,13 @@ def tg(method: str, _http_timeout: int = 30, **params) -> dict:
                 return json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError:
             raise
-        except OSError as e:  # адрес недоступен — переставляем его в конец и пробуем следующий
+        except OSError as e:  # адрес недоступен - переставляем его в конец и пробуем следующий
             last = e
             TG_IPS.append(TG_IPS.pop(0))
     raise last
 
 
-# Постоянное меню внизу чата — чтобы не вспоминать команды
+# Постоянное меню внизу чата - чтобы не вспоминать команды
 BTN_TODAY, BTN_YESTERDAY, BTN_WEEK, BTN_HELP = "📊 Сегодня", "🗓 Вчера", "📈 Неделя", "ℹ️ Помощь"
 BTN_ACCESS = "👥 Доступы"
 MENU = {"keyboard": [[{"text": BTN_TODAY}, {"text": BTN_YESTERDAY}],
@@ -303,7 +302,7 @@ def send_mail(to: str, subject: str, body: str) -> None:
 
 
 def notify(role: str, subject: str, body_html: str, markup: dict | None = None) -> int:
-    """role: report — всем подписчикам; alert — только подписанным на тревоги."""
+    """role: report - всем подписчикам; alert - только подписанным на тревоги."""
     sent = 0
     if os.getenv("TG_TOKEN"):
         for cid in recipients(role):
@@ -321,9 +320,9 @@ def notify(role: str, subject: str, body_html: str, markup: dict | None = None) 
 
 # --- Доступы ------------------------------------------------------------------
 #
-# Роли: owner — владелец (тех. поддержка, получает уведомления о сбоях),
-#       admin — управляет доступом и видит отчёты,
-#       viewer — только смотрит отчёты.
+# Роли: owner - владелец (тех. поддержка, получает уведомления о сбоях),
+#       admin - управляет доступом и видит отчёты,
+#       viewer - только смотрит отчёты.
 # Попасть в бот можно только по одноразовой ссылке-приглашению (24 часа)
 # или по запросу, который одобрил админ.
 
@@ -402,7 +401,7 @@ def owner_link() -> str:
 
 
 def recipients(role: str) -> list:
-    """report — все, у кого есть доступ; alert — только с включёнными уведомлениями о сбоях."""
+    """report - все, у кого есть доступ; alert - только с включёнными уведомлениями о сбоях."""
     with db() as con:
         acl_tables(con)
         q = "select chat_id from tg_users" + (" where alerts = 1" if role == "alert" else "")
@@ -416,13 +415,13 @@ def access_view(con, viewer_cid: str) -> tuple:
     kb = []
     for cid, role, label in users:
         me = " · <i>вы</i>" if cid == viewer_cid else ""
-        L.append(f"{ROLE_NAMES[role]} — {html.escape(label)}{me}")
+        L.append(f"{ROLE_NAMES[role]} - {html.escape(label)}{me}")
         if role != "owner" and cid != viewer_cid:
             kb.append([{"text": f"🗑 Убрать {label}", "callback_data": f"rm:{cid}"}])
     pending = con.execute("select count(*) from tg_requests").fetchone()[0]
     if pending:
         L += ["", f"🙋 Ожидают одобрения: {pending}"]
-    L += ["", "Приглашение — одноразовая ссылка, действует 24 часа."]
+    L += ["", "Приглашение - одноразовая ссылка, действует 24 часа."]
     kb.append([{"text": "➕ Пригласить для просмотра", "callback_data": "inv:viewer"}])
     kb.append([{"text": "➕ Пригласить админа", "callback_data": "inv:admin"}])
     return "\n".join(L), {"inline_keyboard": kb}
@@ -454,7 +453,7 @@ def welcome(cid: str, u) -> None:
     if u["role"] == "owner":
         lines.append("🔔 Сюда же придут уведомления, если что-то сломается.")
     if is_admin(u):
-        lines.append(f"Кнопка «{BTN_ACCESS}» — кто видит отчёты, приглашения и запросы.")
+        lines.append(f"Кнопка {BTN_ACCESS} - кто видит отчёты, приглашения и запросы.")
     tg_send(cid, "\n".join(lines) + "\n\n" + HELP, menu_for(u))
     tg_send(cid, *day_view(datetime.now(MSK) - timedelta(days=1)))
 
@@ -463,15 +462,15 @@ def welcome(cid: str, u) -> None:
 
 HELP = ("<b>👋 Бот отчётов автовебинара</b>\n\n"
         "🕘 Каждое утро в 9:00 присылаю итоги за вчера.\n"
-        "📅 По понедельникам — итоги прошлой недели.\n\n"
+        "📅 По понедельникам - итоги прошлой недели.\n\n"
         "<b>Кнопки внизу:</b>\n"
-        f"{BTN_TODAY} — цифры на текущий момент\n"
-        f"{BTN_YESTERDAY} — итоги за вчера\n"
-        f"{BTN_WEEK} — итоги за 7 дней\n\n"
+        f"{BTN_TODAY} - цифры на текущий момент\n"
+        f"{BTN_YESTERDAY} - итоги за вчера\n"
+        f"{BTN_WEEK} - итоги за 7 дней\n\n"
         "Под отчётами можно листать дни ◀️ ▶️ и сразу открыть Бизон или Сейлбот.")
 
-LOCKED = ("🔒 <b>Отчёты автовебинара — доступ по приглашению.</b>\n\n"
-          "Если вы из команды, нажмите кнопку ниже — администратор получит запрос "
+LOCKED = ("🔒 <b>Отчёты автовебинара - доступ по приглашению.</b>\n\n"
+          "Если вы из команды, нажмите кнопку ниже - администратор получит запрос "
           "и откроет доступ.")
 
 
@@ -533,7 +532,7 @@ def on_start(con, cid: str, arg: str, frm: dict) -> tuple:
 
 
 def process(updates: list, con) -> list:
-    """Разбирает пачку обновлений. Все изменения доступа — здесь, ответы — потом."""
+    """Разбирает пачку обновлений. Все изменения доступа - здесь, ответы - потом."""
     todo = []
     for upd in updates:
         if upd.get("callback_query"):
@@ -636,7 +635,7 @@ def edit(cid, mid, text: str, markup: dict | None) -> None:
         tg("editMessageText", chat_id=cid, message_id=mid, text=text, parse_mode="HTML",
            disable_web_page_preview="true", reply_markup=json.dumps(markup or {"inline_keyboard": []}))
     except Exception:
-        pass  # «message is not modified»
+        pass  # message is not modified
 
 
 def refresh_access(q: dict, cid: str) -> None:
@@ -660,7 +659,7 @@ def answer(todo: list) -> None:
                     acl_tables(con)
                     u = get_user(con, cid)
                 welcome(cid, u)
-                tg_send(by, f"✅ По вашему приглашению подключился {html.escape(label)} — "
+                tg_send(by, f"✅ По вашему приглашению подключился {html.escape(label)} - "
                             f"{ROLE_NAMES[role]}.")
             elif kind == "expired":
                 tg_send(arg, "⌛️ Ссылка уже использована или устарела.\n\n" + LOCKED,
@@ -682,7 +681,7 @@ def answer(todo: list) -> None:
                              {"text": "❌ Отклонить", "callback_data": f"no:{cid}"}]]})
             elif kind == "decided":
                 q, target, label, role = arg
-                verdict = f"✅ {html.escape(label)} — {ROLE_NAMES[role]}" if role else \
+                verdict = f"✅ {html.escape(label)} - {ROLE_NAMES[role]}" if role else \
                           f"❌ Запрос {html.escape(label)} отклонён"
                 tg("answerCallbackQuery", callback_query_id=q["id"], text="Готово")
                 edit(str(q["message"]["chat"]["id"]), q["message"]["message_id"], verdict, None)
@@ -726,7 +725,7 @@ def answer(todo: list) -> None:
 
 
 def poll(wait: int = 0) -> None:
-    """Одна итерация: забрать обновления (wait — long polling, сек) и ответить."""
+    """Одна итерация: забрать обновления (wait - long polling, сек) и ответить."""
     with db() as con:
         acl_tables(con)
         row = con.execute("select v from kv where k = 'tg_offset'").fetchone()
@@ -745,7 +744,7 @@ def poll(wait: int = 0) -> None:
         todo = process(updates, con)
         con.execute("insert or replace into kv values ('tg_offset', ?)",
                     (str(max(u["update_id"] for u in updates) + 1),))
-    answer(todo)  # отвечаем после сохранения — без повторов при сбое
+    answer(todo)  # отвечаем после сохранения - без повторов при сбое
 
 
 def serve() -> None:
@@ -793,7 +792,7 @@ def watchdog() -> None:
         return  # не спамим: одно уведомление раз в 6 часов
     notify("alert", "Проблема с Бизоном",
            "⚠️ <b>Проблема с Бизоном</b>\n" + html.escape(problem) +
-           "\n\nЕсли токен меняли — обновите секрет BIZON_TOKEN в GitHub и перезапустите деплой.")
+           "\n\nЕсли токен меняли - обновите секрет BIZON_TOKEN в GitHub и перезапустите деплой.")
     open(mark, "w").close()
 
 

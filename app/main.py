@@ -56,7 +56,7 @@ def build(now: datetime) -> dict:
         out[f"t{i + 1}"] = today[i]["text"] if i < len(today) else ""
         out[f"m{i + 1}"] = tomorrow[i]["text"] if i < len(tomorrow) else ""
         out[f"mts{i + 1}"] = tomorrow[i]["ts"] if i < len(tomorrow) else 0
-    # b1..b4 — ближайшие 4 сеанса (сначала оставшиеся сегодня, потом завтра).
+    # b1..b4 - ближайшие 4 сеанса (сначала оставшиеся сегодня, потом завтра).
     # Всегда ровно 4 кнопки, без пустых: в боте не нужны условия на количество.
     upcoming = (today + tomorrow)[:MAX_SLOTS]
     for i, s in enumerate(upcoming):
@@ -71,16 +71,16 @@ LABEL_RE = re.compile(r"(сегодня|завтра)\D*(\d{1,2}):(\d{2})", re.I
 MSG_OK = ("✅ Готово, вы записаны!\n\n"
           "📅 {day} {date} в {time} по МСК.\n\n"
           "Чтобы точно ничего не пропустить:\n"
-          "🗓 добавьте семинар в календарь — кнопка ниже;\n"
+          "🗓 добавьте семинар в календарь - кнопка ниже;\n"
           "🔔 включите уведомления от этого чата.\n\n"
-          "За час до начала пришлю напоминание, а за 5 минут — ссылку на эфир.\n"
+          "За час до начала пришлю напоминание, а за 5 минут - ссылку на эфир.\n"
           "Если планы изменятся, время можно поменять кнопкой ниже 👇")
-CAL_TITLE = os.getenv("CAL_TITLE", "Семинар «3 главных звоночка, что у ребёнка проблемы с чтением»")
+CAL_TITLE = os.getenv("CAL_TITLE", "Эфир Натальи Чернецкой: 3 главных звоночка, что у ребёнка проблемы с чтением")
 CAL_MIN = int(os.getenv("CAL_MIN", "90"))
 
 
 def calendar_url(s: datetime) -> str:
-    """Ссылка «добавить в Google Календарь» — открывается и на телефоне, без сервера."""
+    """Ссылка добавить в Google Календарь - открывается и на телефоне, без сервера."""
     fmt = "%Y%m%dT%H%M%SZ"
     start = s.astimezone(timezone.utc)
     end = start + timedelta(minutes=CAL_MIN)
@@ -129,7 +129,7 @@ def _resolve(text: str, now: datetime) -> dict:
         "delay_7": max(seconds_left - 420, 0),
         "delay_5": max(seconds_left - 300, 0),
         # пауза между напоминанием и ссылкой: напоминание уходит через delay_60,
-        # ссылка — через delay_5 от записи, значит после напоминания ждём разницу
+        # ссылка - через delay_5 от записи, значит после напоминания ждём разницу
         "delay_gap": max(seconds_left - 300, 0) - max(seconds_left - 3600, 0),
         "remind_head": "Через час встречаемся!" if seconds_left > 3600 else "Совсем скоро начинаем!",
         "room_url": room,
@@ -198,7 +198,7 @@ def check_visit(client_id: str, ts: int) -> dict:
         ready = any(w.get("webinarId") == webinar_id for w in lst.get("list") or [])
         viewers = session_viewers(webinar_id)
         # Бизон не заводит отчёт по сеансу, в который никто не зашёл. Если эфир
-        # давно закончился, а отчёта нет — значит, в комнате не было никого.
+        # давно закончился, а отчёта нет - значит, в комнате не было никого.
         if not ready and not viewers and now_msk() < start + timedelta(minutes=EMPTY_AFTER_MIN):
             return {**NO_FOLLOWUP, "ready": 0, "visited": 0, "webinar_id": webinar_id}
         needle = f"salebot={client_id}"
@@ -213,15 +213,15 @@ def check_visit(client_id: str, ts: int) -> dict:
                 "minutes": minutes, "segment": seg,
                 "seg_early": int(seg == "early"), "seg_left": int(seg == "left"),
                 "seg_full": int(seg == "full")}
-    except Exception as e:  # сеть/токен — бот получит ready=0 и проверит позже
+    except Exception as e:  # сеть/токен - бот получит ready=0 и проверит позже
         return {**NO_FOLLOWUP, "ready": 0, "visited": 0, "webinar_id": webinar_id,
                 "error": str(e)[:200]}
 
 
 # Догон для тех, кто не пришёл:
-#   1-й пропуск — сразу после эфира снова предлагаем выбрать время (again=1);
-#   2-й пропуск подряд — на следующее утро отправляем запись (record=1).
-# Флаги ставятся только когда отчёт Бизона готов, поэтому ложных «не пришёл» нет.
+#   1-й пропуск - сразу после эфира снова предлагаем выбрать время (again=1);
+#   2-й пропуск подряд - на следующее утро отправляем запись (record=1).
+# Флаги ставятся только когда отчёт Бизона готов, поэтому ложных не пришёл нет.
 RECORD_HOUR = int(os.getenv("RECORD_HOUR", "10"))
 NO_FOLLOWUP = {"miss": 0, "again": 0, "record": 0, "delay_record": 0}
 
@@ -252,7 +252,7 @@ def followup(client_id: str, visited: bool) -> dict:
 def visited_endpoint(client_id: str = Query(...), ts: int = Query(None)):
     real_ts = claim_step(client_id, "check", int(now_msk().timestamp()))
     if real_ts is None:
-        # устаревшая цепочка или повтор — обе ветки (visited 1/0) не сработают
+        # устаревшая цепочка или повтор - обе ветки (visited 1/0) не сработают
         return {**NO_FOLLOWUP, "ready": 0, "visited": -1, "minutes": 0, "segment": "",
                 "seg_early": 0, "seg_left": 0, "seg_full": 0}
     return check_visit(client_id, real_ts)
@@ -275,7 +275,7 @@ def db():
     con.execute("create table if not exists reg (client_id text primary key, ts integer, reg_at integer)")
     con.execute("create table if not exists sent (client_id text, ts integer, step text, "
                 "primary key (client_id, ts, step))")
-    # история всех записей (reg хранит только последнюю) — для отчётов
+    # история всех записей (reg хранит только последнюю) - для отчётов
     con.execute("create table if not exists reg_log (client_id text, ts integer, reg_at integer)")
     con.execute("create table if not exists visits (client_id text, ts integer, visited integer, "
                 "minutes real, segment text, primary key (client_id, ts))")
@@ -317,7 +317,7 @@ def claim_step(client_id: str, step: str, now_ts: int):
 HOUR_TEXT = ("⏰ {head}\nВ {time} по МСК начинаем семинар. Захватите блокнот с ручкой, "
              "будут практические упражнения.\n\nСсылку на эфир пришлю за 5 минут до старта. "
              "Подтвердите, что будете 👇")
-LINK_TEXT = ("🎬 Через 5 минут встречаемся!\nЖмите кнопку — она откроет страницу эфира.\n\n"
+LINK_TEXT = ("🎬 Через 5 минут встречаемся!\nЖмите кнопку - она откроет страницу эфира.\n\n"
              "Можно зайти прямо сейчас и спокойно подготовиться 👇")
 
 
@@ -345,7 +345,7 @@ OFFER_MIN = float(os.getenv("OFFER_MIN", "55"))   # минута, на кото�
 
 
 def watched_minutes(v: dict) -> float:
-    """Сколько минут зритель был в комнате. vi — интервалы просмотра в секундах."""
+    """Сколько минут зритель был в комнате. vi - интервалы просмотра в секундах."""
     vi = v.get("vi") or []
     if isinstance(vi, list) and vi:
         return sum(max(0, (i.get("e") or 0) - (i.get("s") or 0)) for i in vi) / 60
