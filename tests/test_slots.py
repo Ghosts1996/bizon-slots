@@ -185,3 +185,30 @@ def test_empty_room_counts_as_missed(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "now_msk", lambda: t(15, 30))
     r = m.check_visit("c9", ts)
     assert r["ready"] == 1 and r["visited"] == 0 and r["again"] == 1
+
+
+def test_chat_from_bizon_report(monkeypatch):
+    import json
+    from app import report as r
+    rep = {"report": json.dumps({"usersMeta": {
+               "A": {"username": "Ооо", "url": "https://x/room?salebot=1"},
+               "B": {"username": "Тест <b>", "url": "https://x/room"}}}),
+           "messages": json.dumps({"A": ["Опа", "Второе"], "B": ["Сбда"]}),
+           "messagesTS": json.dumps({"A": [1695, 1800], "B": [1731]})}
+    monkeypatch.setattr(r, "bizon_get", lambda path, params: {"report": rep})
+    r._chat_cache.clear()
+    chat = r.session_chat(t(21, d=2))
+    assert [m["text"] for m in chat] == ["Опа", "Сбда", "Второе"]
+    assert chat[0]["bot"] and not chat[1]["bot"]
+    line = r.chat_line(dict(chat[1], hour=21))
+    assert line == "<code>21:00 · 28:51</code> <b>Тест &lt;b&gt;</b>: Сбда"
+    assert r.plural(1, "а", "б", "в") == "а" and r.plural(3, "а", "б", "в") == "б" and r.plural(11, "а", "б", "в") == "в"
+
+
+def test_chat_render_fits_telegram(monkeypatch):
+    from app import report as r
+    msgs = [{"sec": i, "name": "Имя", "text": "x" * 200, "bot": False} for i in range(100)]
+    st = {"chat": [dict(m, hour=14) for m in msgs],
+          "slots": [{"hour": 14, "chat": msgs}]}
+    text = r.render_chat(t(12), st)
+    assert len(text) < 4096 and "последние" in text

@@ -66,6 +66,52 @@ def sync_visits(con, start: datetime, ts: int, regs: set) -> None:
                     (cid, ts, int(bool(hit)), mins, segment(bool(hit), mins)))
 
 
+_chat_cache: dict = {}
+
+
+def session_chat(start: datetime) -> list:
+    """Все сообщения чата сеанса из отчёта Бизона, по порядку."""
+    ts = int(start.timestamp())
+    if ts in _chat_cache:
+        return _chat_cache[ts]
+    try:
+        d = bizon_get("webinars/reports/get", {"webinarId": f"{ROOM_ID}*{start:%Y-%m-%dT%H:%M:00}"})
+    except Exception:
+        return []
+    rep = d.get("report") or {}
+    out = []
+    if isinstance(rep, dict) and rep.get("messages"):
+        msgs = _loads(rep.get("messages"))
+        stamps = _loads(rep.get("messagesTS"))
+        meta = _loads(rep.get("report")).get("usersMeta") or {}
+        for uid, texts in msgs.items():
+            m = meta.get(uid) or {}
+            name = str(m.get("username") or "Гость").strip() or "Гость"
+            sec = stamps.get(uid) or []
+            for i, t in enumerate(texts if isinstance(texts, list) else [texts]):
+                if isinstance(t, dict):
+                    t = t.get("text") or t.get("message") or ""
+                t = str(t).strip()
+                if t:
+                    out.append({"sec": int(sec[i]) if i < len(sec) and sec[i] else 0,
+                                "name": name, "text": t,
+                                "bot": "salebot=" in str(m.get("url") or "")})
+        out.sort(key=lambda x: x["sec"])
+    if datetime.now(MSK) > start + timedelta(hours=3):  # отчёт уже не изменится
+        _chat_cache[ts] = out
+    return out
+
+
+def _loads(v) -> dict:
+    if isinstance(v, dict):
+        return v
+    try:
+        r = json.loads(v or "{}")
+        return r if isinstance(r, dict) else {}
+    except ValueError:
+        return {}
+
+
 def day_stats(day: datetime, with_room: bool = True) -> dict:
     """Цифры за день по всем сеансам."""
     slots, segs = [], {k: 0 for k, _, _ in SEG}
@@ -85,17 +131,21 @@ def day_stats(day: datetime, with_room: bool = True) -> dict:
                     if sg in segs:
                         segs[sg] += 1
                     minutes.append(mins or 0)
-            room = 0
+            room, chat = 0, []
             if with_room and start < datetime.now(MSK):
                 try:
                     room = len(session_viewers(f"{ROOM_ID}*{start:%Y-%m-%dT%H:%M:00}"))
                 except Exception:
                     room = 0
+                if room:
+                    chat = session_chat(start)
             slots.append({"hour": h, "reg": len(regs), "came": len(came), "room": room,
+                          "chat": chat,
                           "passed": start + timedelta(minutes=75) < datetime.now(MSK)})
     reg = sum(s["reg"] for s in slots)
     came = sum(s["came"] for s in slots)
-    return {"day": day, "slots": slots, "reg": reg, "came": came,
+    chat = [dict(m, hour=s["hour"]) for s in slots for m in s["chat"]]
+    return {"day": day, "slots": slots, "reg": reg, "came": came, "chat": chat,
             "room": sum(s["room"] for s in slots), "segs": segs,
             "avg_min": round(sum(minutes) / len(minutes)) if minutes else 0,
             "pct": round(100 * came / reg) if reg else 0}
@@ -167,10 +217,56 @@ def render_day(st: dict, prev: dict | None, title: str) -> str:
     others = st["room"] - st["came"]
     if others > 0:
         L.append(f"Ещё в комнате без бота: {others} (зашли по прямой ссылке)")
+    if st.get("chat"):
+        n, people = len(st["chat"]), len({(m["hour"], m["name"]) for m in st["chat"]})
+        L += ["", f"<b>💬 Чат эфира</b>: {n} {plural(n, 'сообщение', 'сообщения', 'сообщений')}"
+                  f" от {people} {plural(people, 'человека', 'человек', 'человек')}"]
+        last = st["chat"][-CHAT_PREVIEW:]
+        L += [chat_line(m) for m in last]
+        if n > len(last):
+            L.append(f"<i>и ещё {n - len(last)} выше, весь чат по кнопке 💬</i>")
     tip = advice(st)
     if tip:
         L += ["", tip]
     return "\n".join(L)
+
+
+CHAT_PREVIEW = 8
+
+
+def plural(n: int, one: str, few: str, many: str) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return one
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return few
+    return many
+
+
+def chat_line(m: dict, with_hour: bool = True) -> str:
+    t = m["text"] if len(m["text"]) <= 300 else m["text"][:300] + "…"
+    when = f"{m['sec'] // 60}:{m['sec'] % 60:02d}"
+    head = f"{m['hour']:02d}:00 · {when}" if with_hour else when
+    return f"<code>{head}</code> <b>{html.escape(m['name'])}</b>: {html.escape(t)}"
+
+
+def render_chat(day: datetime, st: dict) -> str:
+    """Весь чат за день по сеансам. Влезает в одно сообщение Telegram."""
+    head = f"<b>💬 Чат эфиров, {human_day(day)}</b>"
+    if not st["chat"]:
+        return head + "\n\nВ этот день в чате никто не писал."
+    blocks = []
+    for s in st["slots"]:
+        if s["chat"]:
+            blocks.append(f"\n<b>{s['hour']:02d}:00</b>, {len(s['chat'])} "
+                          f"{plural(len(s['chat']), 'сообщение', 'сообщения', 'сообщений')}")
+            blocks += [chat_line(dict(m, hour=s["hour"]), with_hour=False) for m in s["chat"]]
+    text, skipped = head + "\n" + "\n".join(blocks), 0
+    while len(text) > 3900 and len(blocks) > 1:
+        blocks.pop(1 if blocks[0].startswith("\n<b>") else 0)
+        skipped += 1
+        text = head + f"\n<i>первые {skipped} строк не влезли, показаны последние</i>\n" + "\n".join(blocks)
+    note = "\n\n<i>Время рядом с сообщением: минута эфира, на которой его написали.</i>"
+    return text + note
 
 
 def render_week(end: datetime) -> str:
@@ -268,7 +364,13 @@ def day_keyboard(day: datetime) -> dict:
     else:
         nav.append({"text": f"{next_d:%d.%m} ▶️", "callback_data": f"d:{next_d:%Y-%m-%d}"})
     return {"inline_keyboard": [nav,
-                                [{"text": "📈 Итоги недели", "callback_data": f"w:{day:%Y-%m-%d}"}],
+                                [{"text": "💬 Весь чат", "callback_data": f"c:{day:%Y-%m-%d}"},
+                                 {"text": "📈 Итоги недели", "callback_data": f"w:{day:%Y-%m-%d}"}],
+                                links_row()]}
+
+
+def chat_keyboard(day: datetime) -> dict:
+    return {"inline_keyboard": [[{"text": "📊 Назад к отчёту", "callback_data": f"d:{day:%Y-%m-%d}"}],
                                 links_row()]}
 
 
@@ -467,6 +569,7 @@ HELP = ("<b>👋 Бот отчётов автовебинара</b>\n\n"
         f"{BTN_TODAY} - цифры на текущий момент\n"
         f"{BTN_YESTERDAY} - итоги за вчера\n"
         f"{BTN_WEEK} - итоги за 7 дней\n\n"
+        "В отчёте видно, что писали в чат эфира, а кнопка 💬 Весь чат показывает все сообщения за день.\n"
         "Под отчётами можно листать дни ◀️ ▶️ и сразу открыть Бизон или Сейлбот.")
 
 LOCKED = ("🔒 <b>Отчёты автовебинара - доступ по приглашению.</b>\n\n"
@@ -623,7 +726,10 @@ def handle_callback(q: dict) -> None:
         if day.date() > datetime.now(MSK).date():
             tg("answerCallbackQuery", callback_query_id=q["id"], text="Этот день ещё не наступил")
             return
-        text, markup = day_view(day) if kind == "d" else week_view(day)
+        if kind == "c":
+            text, markup = render_chat(day, day_stats(day)), chat_keyboard(day)
+        else:
+            text, markup = day_view(day) if kind == "d" else week_view(day)
         tg("answerCallbackQuery", callback_query_id=q["id"], text="⏳ Обновляю…")
         edit(cid, mid, text, markup)
     except Exception:
