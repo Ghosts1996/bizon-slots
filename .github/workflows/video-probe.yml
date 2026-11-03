@@ -23,7 +23,12 @@ jobs:
                 HREF=$(curl -s "https://cloud-api.yandex.net/v1/disk/public/resources/download?public_key=$K" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("href",""))' || true)
                 [ -n "$HREF" ] && break
               done
-              [ -n "$HREF" ] || { echo "::error::no href"; exit 1; }
+              if [ -z "$HREF" ]; then
+                for K in https://disk.yandex.ru/i/ZBg6hp4-uKcZdtTl13Ehz https://disk.yandex.ru/d/ZBg6hp4-uKcZdtTl13Ehz; do
+                  echo "::notice::meta $K $(curl -s "https://cloud-api.yandex.net/v1/disk/public/resources?public_key=$K&limit=5" | head -c 700)"
+                done
+                exit 1
+              fi
               curl -sL "$HREF" -o oct.mp4
             fi
             ls -la oct.mp4
