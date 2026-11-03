@@ -22,18 +22,17 @@ jobs:
             from app.main import db, MSK
             from app import report as r
             try:
-                con = db(); r.acl_tables(con)
-                print("users", [(c[:4], role, a) for c, role, a in con.execute('select chat_id, role, alerts from tg_users')])
-                print("invites", con.execute('select count(*), sum(used_by is not null) from tg_invites').fetchone())
-                print("regs", con.execute('select count(*) from reg_log').fetchone()[0])
-                con.commit()
-                from app.main import session_viewers, watched_minutes
-                vs = session_viewers("209601:avtoweb*2026-11-02T21:00:00")
-                print("viewers21", len(vs))
-                for v in vs[:6]:
-                    print("V", {k: (str(v.get(k))[:90]) for k in ("url", "username", "view", "viewTill", "vi", "finished", "mob")}, "min=", round(watched_minutes(v),1))
-                st = r.day_stats(datetime.datetime.now(MSK))
-                print("today", {k: st[k] for k in ('reg','came','room')}, [(s['hour'], s['reg'], s['came'], s['room']) for s in st['slots']])
+                from app.main import bizon_get
+                for wid in ["209601:avtoweb*2026-11-02T21:00:00", "209601:avtoweb*2026-11-03T14:00:00"]:
+                    try:
+                        d = bizon_get("webinars/reports/get", {"webinarId": wid})
+                    except Exception as e:
+                        print(wid[-8:], "ERR", str(e)[:120]); continue
+                    rep = d.get("report") or {}
+                    print(wid[-8:], "top", list(d.keys()), "rep", list(rep.keys()) if isinstance(rep, dict) else type(rep).__name__)
+                    if isinstance(rep, dict):
+                        for k, v in rep.items():
+                            print(" K", k, type(v).__name__, str(v)[:400].replace("\n", " "))
             except Exception:
                 traceback.print_exc()
             PY
