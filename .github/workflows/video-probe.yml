@@ -1,0 +1,48 @@
+name: video-probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          password: ${{ secrets.VDS_PASSWORD }}
+          command_timeout: 60m
+          script: |
+            set -e
+            mkdir -p /opt/video && cd /opt/video
+            command -v ffmpeg >/dev/null || (apt-get update -qq >/dev/null && apt-get install -y -qq ffmpeg >/dev/null 2>&1)
+            echo "::notice::disk $(df -h /opt | tail -1 | tr -s ' ')"
+            if [ ! -s oct.mp4 ]; then
+              for K in https://disk.yandex.ru/i/ZBg6hp4-uKcZdtTl13Ehz https://disk.yandex.ru/d/ZBg6hp4-uKcZdtTl13Ehz; do
+                HREF=$(curl -s "https://cloud-api.yandex.net/v1/disk/public/resources/download?public_key=$K" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("href",""))' || true)
+                [ -n "$HREF" ] && break
+              done
+              [ -n "$HREF" ] || { echo "::error::no href"; exit 1; }
+              curl -sL "$HREF" -o oct.mp4
+            fi
+            ls -la oct.mp4
+            DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 oct.mp4)
+            echo "::notice::size $(du -h oct.mp4 | cut -f1) dur $DUR $(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 oct.mp4)"
+            rm -rf frames && mkdir frames
+            ffmpeg -v error -i oct.mp4 -t 600 -vf "fps=1/10,scale=320:-1" frames/f_%03d.jpg
+            # склейка кадров в один лист 6x10 с номерами
+            ffmpeg -v error -y -i frames/f_%03d.jpg -vf "drawtext=text='%{n}':x=5:y=5:fontsize=24:fontcolor=yellow:box=1:boxcolor=black,tile=6x10" -frames:v 1 sheet.jpg || true
+            base64 -w0 sheet.jpg > sheet.b64; echo "::notice::sheet bytes $(stat -c%s sheet.jpg)"
+      - name: fetch sheet
+        run: |
+          sshpass -V >/dev/null 2>&1 || sudo apt-get install -y -qq sshpass >/dev/null
+          sshpass -p "$PASS" scp -o StrictHostKeyChecking=no "$USER_@$HOST:/opt/video/sheet.jpg" sheet.jpg
+        env:
+          PASS: ${{ secrets.VDS_PASSWORD }}
+          USER_: ${{ secrets.VDS_USER }}
+          HOST: ${{ secrets.VDS_HOST }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sheet
+          path: sheet.jpg
