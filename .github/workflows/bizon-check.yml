@@ -30,9 +30,13 @@ jobs:
                         print(wid[-8:], "ERR", str(e)[:120]); continue
                     rep = d.get("report") or {}
                     print(wid[-8:], "top", list(d.keys()), "rep", list(rep.keys()) if isinstance(rep, dict) else type(rep).__name__)
-                    if isinstance(rep, dict):
-                        for k, v in rep.items():
-                            print(" K", k, type(v).__name__, str(v)[:400].replace("\n", " "))
+                    if isinstance(rep, dict) and rep.get("report"):
+                        rr = json.loads(rep["report"])
+                        print(" RK", list(rr.keys()))
+                        for uk, m in list((rr.get("usersMeta") or {}).items())[:2]:
+                            print(" UM", uk, json.dumps(m, ensure_ascii=False)[:600])
+                        vs = r.session_viewers(wid)
+                        print(" VK", list(vs[0].keys()) if vs else None, json.dumps(vs[0], ensure_ascii=False)[:500] if vs else "")
             except Exception:
                 traceback.print_exc()
             PY
