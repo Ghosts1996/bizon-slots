@@ -22,14 +22,11 @@ jobs:
             from app.main import db, MSK
             from app import report as r
             try:
-                y = datetime.datetime(2026, 11, 2, 12, tzinfo=MSK)
-                st = r.day_stats(y)
-                print(r.plain(r.render_day(st, None, "T")).split("По сеансам")[1])
-                print(r.plain(r.render_chat(y, st)))
-                con = db()
-                print("REG", con.execute("select ts, reg_at from reg").fetchall()[-3:])
-                print("SENT", con.execute("select ts, step from sent order by rowid desc limit 6").fetchall())
-                print("VIS", con.execute("select ts, visited, segment from visits order by rowid desc limit 4").fetchall())
+                con = db(); r.acl_tables(con)
+                print("USERS", [(c[-4:], role, label, a) for c, role, label, a in con.execute("select chat_id, role, label, alerts from tg_users")])
+                print("REQ", con.execute("select * from tg_requests").fetchall()[-5:])
+                print("INV", con.execute("select role, used_by is not null, expires > strftime('%s','now') from tg_invites").fetchall()[-5:])
+                print("KV", [k for k, in con.execute("select k from kv")])
             except Exception:
                 traceback.print_exc()
             PY
