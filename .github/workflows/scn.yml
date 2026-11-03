@@ -1,0 +1,47 @@
+name: scn
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        required: true
+
+jobs:
+  scn:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          password: ${{ secrets.VDS_PASSWORD }}
+          envs: URL
+          script: |
+            mkdir -p /opt/video && cd /opt/video
+            curl -sL "$URL" -o scn.json
+            python3 - <<'PY' > scn.txt 2>&1
+            import json, collections
+            d = json.load(open("scn.json"))
+            print("TOP", type(d).__name__, list(d.keys())[:20] if isinstance(d, dict) else len(d))
+            items = d
+            if isinstance(d, dict):
+                for k, v in d.items():
+                    if isinstance(v, list) and len(v) > 5:
+                        items = v; print("LIST", k, len(v)); break
+            if isinstance(items, list):
+                print("KEYS0", json.dumps(items[0], ensure_ascii=False)[:300])
+                tcount = collections.Counter()
+                for it in items:
+                    if isinstance(it, dict):
+                        t = it.get("action") or it.get("type") or it.get("cmd") or "?"
+                        tcount[str(t)] += 1
+                print("TYPES", dict(tcount))
+                for it in items:
+                    if isinstance(it, dict):
+                        t = str(it.get("action") or it.get("type") or it.get("cmd") or "?")
+                        if t not in ("message", "chat", "msg", "post"):
+                            print("CMD", json.dumps(it, ensure_ascii=False)[:400])
+            PY
+            echo "::notice::$(tr '\n' ' ' < scn.txt | cut -c1-6000)"
+        env:
+          URL: ${{ github.event.inputs.url }}
