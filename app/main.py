@@ -339,7 +339,7 @@ def due_endpoint(client_id: str = Query(...), step: str = Query(..., pattern="^(
 # --- Сегменты по времени просмотра ------------------------------------------
 
 EARLY_MIN = float(os.getenv("EARLY_MIN", "15"))   # ушёл в начале
-OFFER_MIN = float(os.getenv("OFFER_MIN", "55"))   # минута, на которой начинается предложение
+OFFER_MIN = float(os.getenv("OFFER_MIN", "44"))   # минута, на которой начинается предложение
 
 
 def watched_minutes(v: dict) -> float:
