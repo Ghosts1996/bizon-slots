@@ -322,7 +322,7 @@ def _getaddrinfo(host, port, *args, **kwargs):
 
 socket.getaddrinfo = _getaddrinfo
 
-def tg(method: str, _http_timeout: int = 30, **params) -> dict:
+def tg(method: str, _http_timeout: int = 8, **params) -> dict:
     token = os.getenv("TG_TOKEN", "")
     if not token:
         raise RuntimeError("TG_TOKEN не задан")
@@ -337,6 +337,7 @@ def tg(method: str, _http_timeout: int = 30, **params) -> dict:
             raise
         except OSError as e:  # адрес недоступен - переставляем его в конец и пробуем следующий
             last = e
+            print(f"tg {method}: {TG_IPS[0]} недоступен ({e}), пробую следующий", flush=True)
             TG_IPS.append(TG_IPS.pop(0))
     raise last
 
