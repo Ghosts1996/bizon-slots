@@ -17,29 +17,24 @@ jobs:
             echo "::notice::token len=${#BIZON_TOKEN} hash=$(printf %s "$BIZON_TOKEN" | sha256sum | cut -c1-8)"
             cd /opt/bizon-slots
             set -a; . ./.env; set +a
-            systemctl stop bizon-tgbot
             venv/bin/python - <<'PY' > /tmp/diag.txt 2>&1
             import datetime, json, traceback
             from app.main import db, MSK
             from app import report as r
             try:
-                import time as T, faulthandler, sys
-                faulthandler.dump_traceback_later(100, exit=True, file=sys.stdout)
+                con = db(); r.acl_tables(con)
+                print("USERS", [(c[-4:], role, label, a) for c, role, label, a in con.execute("select chat_id, role, label, alerts from tg_users")])
                 u = r.tg("getUpdates", timeout=0, limit=10).get("result", [])
                 print("PENDING", [((x.get("callback_query") or {}).get("data") or (x.get("message") or {}).get("text")) for x in u])
-                t0 = T.time(); r.poll(wait=0); print("POLL", round(T.time() - t0, 1))
-                u = r.tg("getUpdates", timeout=0, limit=10).get("result", [])
-                print("AFTER", len(u))
             except Exception:
                 traceback.print_exc()
             PY
-            systemctl start bizon-tgbot
             venv/bin/pip install -q py-spy >/dev/null 2>&1
             PID=$(systemctl show -p MainPID --value bizon-tgbot)
             SPY=$(venv/bin/py-spy dump --pid $PID 2>&1 | head -40 | tr '\n' '~' | cut -c1-2500)
             echo "::notice::spy since=$(ps -o etime= -p $PID) $SPY"
             J=$(journalctl -u bizon-slots --since '-120min' --no-pager | grep -oE 'GET /(resolve|due|visited)[^ ]*' | sed -E 's/client_id=[^&]+/c=*/; s/text=[^&]+/t=*/' | sort | uniq -c | tr -s ' ' | tr '\n' ';')
-            B=$(journalctl -u bizon-tgbot --since '-60min' --no-pager | grep -v 'systemd\[1\]: Started' | tail -25 | tr '\n' ' ' | cut -c1-2500); P=$(ps aux | grep -c '[a]pp.report serve')
+            B=$(journalctl -u bizon-tgbot --since '-60min' --no-pager | grep -v 'systemd\[1\]' | tail -40 | tr '\n' ' ' | cut -c1-2500); P=$(ps aux | grep -c '[a]pp.report serve')
             echo "::notice::$(systemctl is-active bizon-slots bizon-tgbot | tr '\n' ' ') ¦ $(tr '\n' ' ' < /tmp/diag.txt | cut -c1-2500) ¦ $J ¦ procs=$P bot: $B"
         env:
           BIZON_TOKEN: ${{ secrets.BIZON_TOKEN }}
