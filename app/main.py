@@ -134,6 +134,21 @@ def _resolve(text: str, now: datetime) -> dict:
     }
 
 
+# Готовые файлы для передачи клиенту (видео и т.п.), по ссылке с ключом
+FILES_DIR = os.getenv("FILES_DIR", "/opt/video/out")
+FILES_KEY = os.getenv("FILES_KEY", "9efOx-bXPs1Dm_IC")
+
+
+@app.get("/files/{key}/{name}")
+def files(key: str, name: str):
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+    path = os.path.join(FILES_DIR, os.path.basename(name))
+    if key != FILES_KEY or not os.path.isfile(path):
+        raise HTTPException(404)
+    return FileResponse(path, filename=os.path.basename(name))
+
+
 @app.get("/health")
 def health():
     return {"ok": 1}
