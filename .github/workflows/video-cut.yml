@@ -1,0 +1,57 @@
+name: video-cut
+
+on:
+  workflow_dispatch:
+    inputs:
+      gid:
+        required: true
+      skip:
+        default: "396"
+
+permissions:
+  contents: write
+
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          password: ${{ secrets.VDS_PASSWORD }}
+          command_timeout: 80m
+          envs: GID,SKIP
+          script: |
+            set -e
+            mkdir -p /opt/video/out && cd /opt/video
+            command -v ffmpeg >/dev/null || (apt-get update -qq >/dev/null && apt-get install -y -qq ffmpeg >/dev/null 2>&1)
+            [ -x /opt/video/venv/bin/gdown ] || (python3 -m venv /opt/video/venv && /opt/video/venv/bin/pip install -q gdown)
+            if [ ! -s src.mp4 ]; then /opt/video/venv/bin/gdown -q --id "$GID" -O src.mp4 || /opt/video/venv/bin/gdown -q "https://drive.google.com/uc?id=$GID" -O src.mp4; fi
+            echo "::notice::src $(du -h src.mp4 | cut -f1) $(ffprobe -v error -show_entries format=duration -of csv=p=0 src.mp4) $(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 src.mp4)"
+            # ближайший ключевой кадр не раньше SKIP, чтобы не захватить ни кадра заставки
+            KF=$(ffprobe -v error -select_streams v:0 -skip_frame nokey -show_entries frame=pts_time -of csv=p=0 -read_intervals "$SKIP%+20" src.mp4 | awk -v s="$SKIP" '$1>=s{print; exit}')
+            echo "::notice::keyframe $KF"
+            ffmpeg -v error -y -ss "$KF" -i src.mp4 -map 0 -c copy -avoid_negative_ts make_zero -movflags +faststart out/tri_zvonochka.mp4
+            echo "::notice::out $(du -h out/tri_zvonochka.mp4 | cut -f1) $(ffprobe -v error -show_entries format=duration -of csv=p=0 out/tri_zvonochka.mp4)"
+            ffmpeg -v error -y -i out/tri_zvonochka.mp4 -vf "select='eq(n\,0)+eq(n\,50)+eq(n\,500)',scale=480:-1,tile=3x1" -frames:v 1 out/first.jpg
+            ffmpeg -v error -y -ss 380 -i src.mp4 -vf "fps=1/4,scale=240:-1,tile=6x1" -frames:v 1 out/around.jpg
+        env:
+          GID: ${{ github.event.inputs.gid }}
+          SKIP: ${{ github.event.inputs.skip }}
+      - name: frames
+        run: |
+          sudo apt-get install -y -qq sshpass >/dev/null
+          for f in first around; do sshpass -p "$PASS" scp -o StrictHostKeyChecking=no "$USER_@$HOST:/opt/video/out/$f.jpg" $f.jpg; done
+          for f in first around; do
+            B64=$(base64 -w0 $f.jpg)
+            SHA=$(curl -s -H "Authorization: Bearer $GH" "https://api.github.com/repos/${{ github.repository }}/contents/out/$f.jpg?ref=scn-out" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("sha",""))' || true)
+            printf '{"message":"f","branch":"scn-out","content":"%s"%s}' "$B64" "${SHA:+,\"sha\":\"$SHA\"}" > b.json
+            curl -s -X PUT -H "Authorization: Bearer $GH" "https://api.github.com/repos/${{ github.repository }}/contents/out/$f.jpg" -d @b.json > /dev/null
+          done
+        env:
+          PASS: ${{ secrets.VDS_PASSWORD }}
+          USER_: ${{ secrets.VDS_USER }}
+          HOST: ${{ secrets.VDS_HOST }}
+          GH: ${{ secrets.GITHUB_TOKEN }}
