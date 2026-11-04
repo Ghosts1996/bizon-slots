@@ -17,31 +17,23 @@ jobs:
             echo "::notice::token len=${#BIZON_TOKEN} hash=$(printf %s "$BIZON_TOKEN" | sha256sum | cut -c1-8)"
             cd /opt/bizon-slots
             set -a; . ./.env; set +a
+            systemctl stop bizon-tgbot
             venv/bin/python - <<'PY' > /tmp/diag.txt 2>&1
             import datetime, json, traceback
             from app.main import db, MSK
             from app import report as r
             try:
-                import time as T
-                y = datetime.datetime(2026, 11, 3, 12, tzinfo=MSK)
-                orig = r.bizon_get
-                calls = []
-                def timed(path, params):
-                    t0 = T.time()
-                    try:
-                        return orig(path, params)
-                    finally:
-                        calls.append((path.split("/")[-1], round(T.time() - t0, 1)))
-                r.bizon_get = timed
-                import app.main as M; M.bizon_get = timed
-                t0 = T.time(); st = r.day_stats(y); print("DAY", round(T.time() - t0, 1))
-                t0 = T.time(); txt = r.render_chat(y, st); print("CHAT", round(T.time() - t0, 1), len(txt))
-                print("CALLS", calls)
+                import time as T, faulthandler, sys
+                faulthandler.dump_traceback_later(100, exit=True, file=sys.stdout)
                 u = r.tg("getUpdates", timeout=0, limit=10).get("result", [])
-                print("PENDING", [(x.get("message") or x.get("callback_query", {})).get("data") or (x.get("message") or {}).get("text") for x in u])
+                print("PENDING", [((x.get("callback_query") or {}).get("data") or (x.get("message") or {}).get("text")) for x in u])
+                t0 = T.time(); r.poll(wait=0); print("POLL", round(T.time() - t0, 1))
+                u = r.tg("getUpdates", timeout=0, limit=10).get("result", [])
+                print("AFTER", len(u))
             except Exception:
                 traceback.print_exc()
             PY
+            systemctl start bizon-tgbot
             venv/bin/pip install -q py-spy >/dev/null 2>&1
             PID=$(systemctl show -p MainPID --value bizon-tgbot)
             SPY=$(venv/bin/py-spy dump --pid $PID 2>&1 | head -40 | tr '\n' '~' | cut -c1-2500)
