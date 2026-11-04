@@ -212,3 +212,20 @@ def test_chat_render_fits_telegram(monkeypatch):
           "slots": [{"hour": 14, "chat": msgs}]}
     text = r.render_chat(t(12), st)
     assert len(text) < 4096 and "последние" in text
+
+
+def test_owner_transfer(tmp_path, monkeypatch):
+    import app.main as m
+    from app import report as r
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    con = m.db(); r.acl_tables(con)
+    r.add_user(con, "1", "owner", "@me"); r.add_user(con, "2", "admin", "@new")
+    _, kb = r.access_view(con, "1")
+    assert any(b["callback_data"] == "own:2" for row in kb["inline_keyboard"] for b in row)
+    q = {"id": "x", "data": "own:2", "message": {"chat": {"id": 1}, "message_id": 5}}
+    assert r.process([{"callback_query": q}], con)[0][0] == "own_ask"
+    q["data"] = "own:2:yes"
+    assert r.process([{"callback_query": q}], con)[0][0] == "owned"
+    assert r.get_user(con, "2")["role"] == "owner" and r.get_user(con, "1")["role"] == "admin"
+    q["data"] = "own:1:yes"   # бывший владелец больше не может
+    assert r.process([{"callback_query": q}], con)[0][1][1] == "Это может только владелец"

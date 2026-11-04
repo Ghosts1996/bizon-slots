@@ -513,6 +513,7 @@ def recipients(role: str) -> list:
 def access_view(con, viewer_cid: str) -> tuple:
     users = con.execute("select chat_id, role, label from tg_users order by "
                         "case role when 'owner' then 0 when 'admin' then 1 else 2 end, added_at").fetchall()
+    viewer_role = next((r for c, r, _ in users if c == viewer_cid), "")
     L = ["<b>👥 Доступ к отчётам</b>", ""]
     kb = []
     for cid, role, label in users:
@@ -520,6 +521,8 @@ def access_view(con, viewer_cid: str) -> tuple:
         L.append(f"{ROLE_NAMES[role]} - {html.escape(label)}{me}")
         if role != "owner" and cid != viewer_cid:
             kb.append([{"text": f"🗑 Убрать {label}", "callback_data": f"rm:{cid}"}])
+            if viewer_role == "owner" and role == "admin":
+                kb.append([{"text": f"👑 Сделать владельцем {label}", "callback_data": f"own:{cid}"}])
     pending = con.execute("select count(*) from tg_requests").fetchone()[0]
     if pending:
         L += ["", f"🙋 Ожидают одобрения: {pending}"]
@@ -653,6 +656,21 @@ def process(updates: list, con) -> list:
                 todo.append(("requested", (q, cid, label_of(frm), fresh)))
             elif not u:
                 todo.append(("cbmsg", (q, "Нет доступа")))
+            elif data.startswith("own:") and u["role"] != "owner":
+                todo.append(("cbmsg", (q, "Это может только владелец")))
+            elif data.startswith("own:"):
+                target, _, confirmed = data[4:].partition(":")
+                t = get_user(con, target)
+                if confirmed != "yes":
+                    todo.append(("own_ask", (q, target, t["label"] if t else "")))
+                    continue
+                if not t or t["role"] != "admin":
+                    todo.append(("cbmsg", (q, "Передать можно только админу")))
+                    continue
+                # новый владелец получает и уведомления о сбоях; прежний остаётся админом
+                con.execute("update tg_users set role = 'owner', alerts = 1 where chat_id = ?", (target,))
+                con.execute("update tg_users set role = 'admin' where chat_id = ?", (cid,))
+                todo.append(("owned", (q, cid, target, t["label"])))
             elif data.startswith(("ok:", "no:", "rm:", "inv:")) and not is_admin(u):
                 todo.append(("cbmsg", (q, "Это может только админ")))
             elif data.startswith(("ok:", "no:")):
@@ -798,6 +816,24 @@ def answer(todo: list) -> None:
                     welcome(target, u)
                 else:
                     tg_send(target, "К сожалению, в доступе отказано.")
+            elif kind == "own_ask":
+                q, target, label = arg
+                tg("answerCallbackQuery", callback_query_id=q["id"])
+                edit(q["message"]["chat"]["id"], q["message"]["message_id"],
+                     f"👑 Передать роль владельца {html.escape(label)}?\n\n"
+                     "Вы останетесь админом и сможете дальше смотреть отчёты и приглашать людей. "
+                     "Новый владелец будет получать уведомления о сбоях и сможет убрать любого.",
+                     {"inline_keyboard": [[{"text": "✅ Да, передать", "callback_data": f"own:{target}:yes"}],
+                                          [{"text": "↩️ Отмена", "callback_data": "acc"}]]})
+            elif kind == "owned":
+                q, cid, target, label = arg
+                tg("answerCallbackQuery", callback_query_id=q["id"], text=f"Владелец теперь {label}")
+                refresh_access(q, cid)
+                with db() as con:
+                    acl_tables(con)
+                    tu = get_user(con, target)
+                tg_send(target, "👑 Вам передали роль владельца отчётов. Сюда же будут приходить "
+                                "уведомления, если что-то сломается.", menu_for(tu))
             elif kind == "removed":
                 q, cid, target, label = arg
                 tg("answerCallbackQuery", callback_query_id=q["id"], text=f"Доступ {label} убран")
