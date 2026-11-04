@@ -219,12 +219,8 @@ def render_day(st: dict, prev: dict | None, title: str) -> str:
         L.append(f"Ещё в комнате без бота: {others} (зашли по прямой ссылке)")
     if st.get("chat"):
         n, people = len(st["chat"]), len({(m["hour"], m["name"]) for m in st["chat"]})
-        L += ["", f"<b>💬 Чат эфира</b>: {n} {plural(n, 'сообщение', 'сообщения', 'сообщений')}"
-                  f" от {people} {plural(people, 'человека', 'человек', 'человек')}"]
-        last = st["chat"][-CHAT_PREVIEW:]
-        L += [chat_line(m) for m in last]
-        if n > len(last):
-            L.append(f"<i>и ещё {n - len(last)} раньше</i>")
+        L += ["", f"💬 Сообщений в чате: <b>{n}</b> от {people} "
+                  f"{plural(people, 'человека', 'человек', 'человек')}"]
     tip = advice(st)
     if tip:
         L += ["", tip]
@@ -572,7 +568,7 @@ HELP = ("<b>👋 Бот отчётов автовебинара</b>\n\n"
         f"{BTN_TODAY} - цифры на текущий момент\n"
         f"{BTN_YESTERDAY} - итоги за вчера\n"
         f"{BTN_WEEK} - итоги за 7 дней\n\n"
-        "В отчёте видно, что писали в чат эфира.\n"
+        "В отчёте видно, сколько сообщений написали в чат эфира.\n"
         "Под отчётами можно листать дни ◀️ ▶️ и сразу открыть Бизон или Сейлбот.")
 
 LOCKED = ("🔒 <b>Отчёты автовебинара - доступ по приглашению.</b>\n\n"
