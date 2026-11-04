@@ -224,7 +224,7 @@ def render_day(st: dict, prev: dict | None, title: str) -> str:
         last = st["chat"][-CHAT_PREVIEW:]
         L += [chat_line(m) for m in last]
         if n > len(last):
-            L.append(f"<i>и ещё {n - len(last)} выше, весь чат по кнопке 💬</i>")
+            L.append(f"<i>и ещё {n - len(last)} раньше</i>")
     tip = advice(st)
     if tip:
         L += ["", tip]
@@ -365,8 +365,7 @@ def day_keyboard(day: datetime) -> dict:
     else:
         nav.append({"text": f"{next_d:%d.%m} ▶️", "callback_data": f"d:{next_d:%Y-%m-%d}"})
     return {"inline_keyboard": [nav,
-                                [{"text": "💬 Весь чат", "callback_data": f"c:{day:%Y-%m-%d}"},
-                                 {"text": "📈 Итоги недели", "callback_data": f"w:{day:%Y-%m-%d}"}],
+                                [{"text": "📈 Итоги недели", "callback_data": f"w:{day:%Y-%m-%d}"}],
                                 links_row()]}
 
 
@@ -573,7 +572,7 @@ HELP = ("<b>👋 Бот отчётов автовебинара</b>\n\n"
         f"{BTN_TODAY} - цифры на текущий момент\n"
         f"{BTN_YESTERDAY} - итоги за вчера\n"
         f"{BTN_WEEK} - итоги за 7 дней\n\n"
-        "В отчёте видно, что писали в чат эфира, а кнопка 💬 Весь чат показывает все сообщения за день.\n"
+        "В отчёте видно, что писали в чат эфира.\n"
         "Под отчётами можно листать дни ◀️ ▶️ и сразу открыть Бизон или Сейлбот.")
 
 LOCKED = ("🔒 <b>Отчёты автовебинара - доступ по приглашению.</b>\n\n"
