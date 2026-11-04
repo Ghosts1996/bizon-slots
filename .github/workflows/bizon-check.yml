@@ -22,23 +22,23 @@ jobs:
             from app.main import db, MSK
             from app import report as r
             try:
-                u = r.tg("getUpdates", timeout=0, limit=10).get("result", [])
-                for x in u:
-                    m = x.get("message") or x.get("callback_query", {})
-                    print("U", x["update_id"], (m.get("text") or m.get("data") or "")[:30])
-                con = db(); r.acl_tables(con)
-                todo = r.process(u, con)
-                print("TODO", [(k, str(a)[:60]) for k, a in todo])
-                for item in todo:
+                import time as T
+                y = datetime.datetime(2026, 11, 3, 12, tzinfo=MSK)
+                orig = r.bizon_get
+                calls = []
+                def timed(path, params):
+                    t0 = T.time()
                     try:
-                        r.answer([item]) if False else None
-                        k, a = item
-                        if k == "text":
-                            r.handle_text(*a)
-                        print("OK", k)
-                    except Exception:
-                        print("FAIL", k, traceback.format_exc()[-900:])
-                con.rollback()
+                        return orig(path, params)
+                    finally:
+                        calls.append((path.split("/")[-1], round(T.time() - t0, 1)))
+                r.bizon_get = timed
+                import app.main as M; M.bizon_get = timed
+                t0 = T.time(); st = r.day_stats(y); print("DAY", round(T.time() - t0, 1))
+                t0 = T.time(); txt = r.render_chat(y, st); print("CHAT", round(T.time() - t0, 1), len(txt))
+                print("CALLS", calls)
+                u = r.tg("getUpdates", timeout=0, limit=10).get("result", [])
+                print("PENDING", [(x.get("message") or x.get("callback_query", {})).get("data") or (x.get("message") or {}).get("text") for x in u])
             except Exception:
                 traceback.print_exc()
             PY
