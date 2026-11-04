@@ -8,6 +8,7 @@ EnvironmentFile=-/opt/bizon-slots/.env
 EnvironmentFile=-/opt/bizon-slots/settings.env
 ExecStart=/opt/bizon-slots/venv/bin/python -m app.report serve
 Restart=always
+RuntimeMaxSec=21600
 RestartSec=5
 
 [Install]

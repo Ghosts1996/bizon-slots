@@ -853,13 +853,28 @@ def poll(wait: int = 0) -> None:
     answer(todo)  # отвечаем после сохранения - без повторов при сбое
 
 
+def _stuck(signum, frame):
+    raise TimeoutError("обработка обновлений зависла")
+
+
 def serve() -> None:
-    """Постоянная работа бота: кнопки отвечают мгновенно."""
+    """Постоянная работа бота: кнопки отвечают мгновенно.
+
+    Каждая итерация ограничена по времени: если Telegram или Бизон
+    подвисли на сетевом запросе, бот не застрянет, а пойдёт дальше.
+    """
+    import signal
+    import traceback
+    signal.signal(signal.SIGALRM, _stuck)
     while True:
+        signal.alarm(180)
         try:
             poll(wait=25)
         except Exception:
+            traceback.print_exc()
             time.sleep(5)
+        finally:
+            signal.alarm(0)
 
 
 # --- Задачи по расписанию ------------------------------------------------------
