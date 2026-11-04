@@ -39,7 +39,7 @@ jobs:
                 traceback.print_exc()
             PY
             J=$(journalctl -u bizon-slots --since '-120min' --no-pager | grep -oE 'GET /(resolve|due|visited)[^ ]*' | sed -E 's/client_id=[^&]+/c=*/; s/text=[^&]+/t=*/' | sort | uniq -c | tr -s ' ' | tr '\n' ';')
-            B=$(journalctl -u bizon-tgbot --since '-120min' --no-pager | tail -2 | tr '\n' ' ' | cut -c1-200)
-            echo "::notice::$(systemctl is-active bizon-slots bizon-tgbot | tr '\n' ' ') ¦ $(tr '\n' ' ' < /tmp/diag.txt | cut -c1-2500) ¦ $J ¦ bot: $B"
+            B=$(journalctl -u bizon-tgbot --since '-60min' --no-pager | grep -v 'systemd\[1\]: Started' | tail -25 | tr '\n' ' ' | cut -c1-2500); P=$(ps aux | grep -c '[a]pp.report serve')
+            echo "::notice::$(systemctl is-active bizon-slots bizon-tgbot | tr '\n' ' ') ¦ $(tr '\n' ' ' < /tmp/diag.txt | cut -c1-2500) ¦ $J ¦ procs=$P bot: $B"
         env:
           BIZON_TOKEN: ${{ secrets.BIZON_TOKEN }}
