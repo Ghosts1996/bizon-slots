@@ -22,16 +22,23 @@ jobs:
             from app.main import db, MSK
             from app import report as r
             try:
-                import urllib.error
-                print("WH", json.dumps(r.tg("getWebhookInfo").get("result"), ensure_ascii=False)[:400])
-                print("ME", r.tg("getMe").get("result", {}).get("username"))
-                try:
-                    u = r.tg("getUpdates", timeout=0, limit=1)
-                    print("UPD ok", len(u.get("result", [])))
-                except urllib.error.HTTPError as e:
-                    print("UPD HTTP", e.code, e.read().decode()[:300])
-                con = db()
-                print("OFF", con.execute("select v from kv where k='tg_offset'").fetchone())
+                u = r.tg("getUpdates", timeout=0, limit=10).get("result", [])
+                for x in u:
+                    m = x.get("message") or x.get("callback_query", {})
+                    print("U", x["update_id"], (m.get("text") or m.get("data") or "")[:30])
+                con = db(); r.acl_tables(con)
+                todo = r.process(u, con)
+                print("TODO", [(k, str(a)[:60]) for k, a in todo])
+                for item in todo:
+                    try:
+                        r.answer([item]) if False else None
+                        k, a = item
+                        if k == "text":
+                            r.handle_text(*a)
+                        print("OK", k)
+                    except Exception:
+                        print("FAIL", k, traceback.format_exc()[-900:])
+                con.rollback()
             except Exception:
                 traceback.print_exc()
             PY
