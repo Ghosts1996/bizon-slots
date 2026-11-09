@@ -1,7 +1,9 @@
-"""Обходит публичную папку Яндекс Диска и печатает ссылку на самое большое видео.
-Список всех файлов - в stderr."""
+"""Обходит публичную папку Яндекс Диска и печатает все видео:
+size<TAB>modified<TAB>path<TAB>href (ссылка на скачивание)."""
 import json
 import sys
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -10,28 +12,29 @@ key = sys.argv[1]
 
 
 def get(url, **q):
-    with urllib.request.urlopen(f"{url}?{urllib.parse.urlencode(q)}", timeout=30) as r:
-        return json.load(r)
+    for i in range(6):
+        try:
+            with urllib.request.urlopen(f"{url}?{urllib.parse.urlencode(q)}", timeout=30) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code != 429:
+                raise
+            time.sleep(10 * (i + 1))
+    raise RuntimeError("429")
 
 
 def walk(path="/"):
     d = get(API, public_key=key, path=path, limit=200)
-    if d.get("type") != "dir":
-        yield d
-        return
     for it in d.get("_embedded", {}).get("items", []):
+        time.sleep(1)
         if it.get("type") == "dir":
             yield from walk(it["path"])
         else:
             yield it
 
 
-files = list(walk())
-for f in files:
-    print(f.get("size"), f.get("mime_type"), f["path"], file=sys.stderr)
-vids = [f for f in files if (f.get("mime_type") or "").startswith("video")
-        or f["path"].lower().endswith((".mp4", ".mov", ".mkv", ".webm"))]
-if vids:
-    v = max(vids, key=lambda f: f.get("size") or 0)
-    print(v["path"], file=sys.stderr)
-    print(get(API + "/download", public_key=key, path=v["path"])["href"])
+for f in walk():
+    if (f.get("mime_type") or "").startswith("video"):
+        time.sleep(2)
+        href = get(API + "/download", public_key=key, path=f["path"])["href"]
+        print(f"{f.get('size')}\t{f.get('modified')}\t{f['path']}\t{href}")
