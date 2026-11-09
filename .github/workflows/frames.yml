@@ -1,0 +1,48 @@
+name: frames
+
+# Лист кадров из видео на VDS: file, start (сек), step (сек), n (кадров) -> ветка scn-data, frames.jpg
+on:
+  workflow_dispatch:
+    inputs:
+      file: {required: true}
+      start: {required: true}
+      step: {default: "10"}
+      n: {default: "36"}
+
+permissions:
+  contents: write
+
+jobs:
+  frames:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          password: ${{ secrets.VDS_PASSWORD }}
+          envs: F,S,STEP,N
+          command_timeout: 20m
+          script: |
+            cd /opt/video && rm -rf fr && mkdir fr
+            for i in $(seq 0 $((N-1))); do
+              T=$((S + i*STEP))
+              ffmpeg -v error -ss $T -i "$F" -frames:v 1 -vf "scale=240:-1,drawtext=text='$((T/60))m$((T%60))s':x=4:y=4:fontsize=18:fontcolor=yellow:box=1:boxcolor=black" fr/$(printf %03d $i).jpg </dev/null
+            done
+            ffmpeg -v error -y -i fr/%03d.jpg -vf tile=6x$(( (N+5)/6 )) -frames:v 1 frames.jpg
+        env:
+          F: ${{ github.event.inputs.file }}
+          S: ${{ github.event.inputs.start }}
+          STEP: ${{ github.event.inputs.step }}
+          N: ${{ github.event.inputs.n }}
+      - run: |
+          sudo apt-get install -y -qq sshpass >/dev/null
+          git clone -q --depth 1 -b scn-data "https://x-access-token:${GH}@github.com/${{ github.repository }}" d && cd d
+          sshpass -p "$PASS" scp -o StrictHostKeyChecking=no "$USER_@$HOST:/opt/video/frames.jpg" frames.jpg
+          git config user.name bot && git config user.email bot@users.noreply.github.com
+          git add . && git commit -qm frames && git push -q
+        env:
+          PASS: ${{ secrets.VDS_PASSWORD }}
+          USER_: ${{ secrets.VDS_USER }}
+          HOST: ${{ secrets.VDS_HOST }}
+          GH: ${{ secrets.GITHUB_TOKEN }}
