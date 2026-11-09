@@ -58,7 +58,7 @@ jobs:
             for f in new.mp4 oct.mp4 src.mp4 out/tri_zvonochka.mp4; do
               [ -s "$f" ] && echo "$f $(du -h $f | cut -f1) dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 $f)"
             done
-            [ -s new.mp4 ] && [ -s oct.mp4 ] && venv/bin/python align.py new.mp4 oct.mp4
+            [ -s new.mp4 ] && [ -s oct.mp4 ] && venv/bin/python tools/align.py new.mp4 oct.mp4
             true
         env:
           VIDEO_URL: ${{ github.event.inputs.video_url }}
