@@ -405,7 +405,7 @@ def nudge_endpoint(client_id: str = Query(...), step: str = Query("30m", pattern
 # --- Сегменты по времени просмотра ------------------------------------------
 
 EARLY_MIN = float(os.getenv("EARLY_MIN", "15"))   # ушёл в начале
-OFFER_MIN = float(os.getenv("OFFER_MIN", "44"))   # минута, на которой начинается предложение
+OFFER_MIN = float(os.getenv("OFFER_MIN", "40"))   # минута, на которой начинается предложение (баннер 40:13 в новом видео)
 
 
 def watched_minutes(v: dict) -> float:
