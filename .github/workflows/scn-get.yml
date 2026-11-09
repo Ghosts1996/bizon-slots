@@ -24,7 +24,7 @@ jobs:
           host: ${{ secrets.VDS_HOST }}
           username: ${{ secrets.VDS_USER }}
           password: ${{ secrets.VDS_PASSWORD }}
-          source: "tools/align.py"
+          source: "tools/align.py,tools/yadisk.py"
           target: /opt/video
       - uses: appleboy/ssh-action@v1.2.0
         with:
@@ -41,24 +41,13 @@ jobs:
             exec > info.txt 2>&1
             ls -la /opt/video /opt/video/out
             if [ ! -s new.mp4 ]; then
-              ID="${VIDEO_URL##*/}"
-              for K in "$VIDEO_URL" "https://disk.yandex.ru/d/$ID" "https://yadi.sk/d/$ID"; do
-                META=$(curl -s "https://cloud-api.yandex.net/v1/disk/public/resources?public_key=$K&limit=50")
-                echo "meta $K: $(echo "$META" | head -c 500)"
-                P=$(echo "$META" | python3 -c 'import sys,json
-            d=json.load(sys.stdin)
-            if d.get("type")=="dir":
-                v=[i for i in d.get("_embedded",{}).get("items",[]) if (i.get("mime_type") or "").startswith("video")]
-                print(v[0]["path"] if v else "")' 2>/dev/null)
-                HREF=$(curl -s -G "https://cloud-api.yandex.net/v1/disk/public/resources/download" --data-urlencode "public_key=$K" ${P:+--data-urlencode "path=$P"} | python3 -c 'import sys,json;print(json.load(sys.stdin).get("href",""))' 2>/dev/null)
-                [ -n "$HREF" ] && break
-              done
+              HREF=$(python3 tools/yadisk.py "$VIDEO_URL")
               [ -n "$HREF" ] && curl -sL "$HREF" -o new.mp4 || echo "NO HREF"
             fi
-            for f in new.mp4 oct.mp4 src.mp4 out/tri_zvonochka.mp4; do
+            for f in new.mp4 src.mp4 out/tri_zvonochka.mp4; do
               [ -s "$f" ] && echo "$f $(du -h $f | cut -f1) dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 $f)"
             done
-            [ -s new.mp4 ] && [ -s oct.mp4 ] && venv/bin/python tools/align.py new.mp4 oct.mp4
+            [ -s new.mp4 ] && [ -s src.mp4 ] && venv/bin/python tools/align.py new.mp4 src.mp4
             true
         env:
           VIDEO_URL: ${{ github.event.inputs.video_url }}
