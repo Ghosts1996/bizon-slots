@@ -24,7 +24,7 @@ jobs:
           host: ${{ secrets.VDS_HOST }}
           username: ${{ secrets.VDS_USER }}
           password: ${{ secrets.VDS_PASSWORD }}
-          source: "tools/align.py,tools/yadisk.py"
+          source: "tools/align.py,tools/yadisk.py,tools/refine.py"
           target: /opt/video
       - uses: appleboy/ssh-action@v1.2.0
         with:
@@ -42,10 +42,10 @@ jobs:
             ls -la /opt/video /opt/video/out
             python3 tools/yadisk.py "$VIDEO_URL" > vids.tsv
             echo "src.mp4 dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 src.mp4)"
-            while IFS=$'\t' read -r SIZE MOD P HREF; do
-              echo "=== $P size=$SIZE modified=$MOD dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$HREF" </dev/null)"
-              venv/bin/python tools/align.py "$HREF" src.mp4 </dev/null
-            done < vids.tsv
+            HREF=$(grep "8окт" vids.tsv | cut -f4)
+            echo "== start"; venv/bin/python tools/refine.py "$HREF" 0 30 src.mp4 380 40
+            echo "== cut";   venv/bin/python tools/refine.py "$HREF" 565 40 src.mp4 950 310
+            echo "== end";   venv/bin/python tools/refine.py "$HREF" 3440 46 src.mp4 3820 320
             true
         env:
           VIDEO_URL: ${{ github.event.inputs.video_url }}
