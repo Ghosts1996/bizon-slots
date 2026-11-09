@@ -28,12 +28,17 @@ jobs:
           for f in a1 a2; do sshpass -p "$PASS" scp -o StrictHostKeyChecking=no "$USER_@$HOST:/opt/video/$f.ogg" $f.ogg; done
           pip install -q faster-whisper
           python - <<'PY'
+          import subprocess, numpy as np
           from faster_whisper import WhisperModel
+          def pcm(f):
+              raw = subprocess.run(["ffmpeg", "-v", "error", "-i", f, "-ac", "1", "-ar", "16000", "-f", "f32le", "-"],
+                                   capture_output=True, check=True).stdout
+              return np.frombuffer(raw, np.float32)
           m = WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=4)
           out = open("transcript.txt", "w")
           # время - как в новом видео: второй кусок начинается с 594.86 сек
           for f, base in (("a1.ogg", 0.0), ("a2.ogg", 988.3 - 393.44)):
-              segs, _ = m.transcribe(f, language="ru", beam_size=1, vad_filter=True)
+              segs, _ = m.transcribe(pcm(f), language="ru", beam_size=1, vad_filter=True)
               for s in segs:
                   t = base + s.start
                   out.write(f"{int(t//60):02d}:{int(t%60):02d} {s.text.strip()}\n"); out.flush()
