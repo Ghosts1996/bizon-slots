@@ -26,7 +26,7 @@ def best(chunk, ref):
     mu = (cs[m:] - cs[:-m]) / m
     sd = np.sqrt(np.maximum((cs2[m:] - cs2[:-m]) / m - mu ** 2, 1e-9))
     score = corr / (sd * m)
-    score[sd < 0.3 * ref.std()] = -1  # тишина/заставка - не сравниваем
+    score[sd < 0.3 * np.median(sd)] = -1  # тишина/заставка - не сравниваем
     i = int(score.argmax())
     return i, float(score[i])
 
