@@ -1,0 +1,72 @@
+name: scn-get
+
+# Забирает сценарий автовебинара из Бизона и новое видео с Яндекс Диска на VDS,
+# а сценарий и сводку кладёт в ветку scn-data (чтобы их можно было править).
+
+on:
+  workflow_dispatch:
+    inputs:
+      scn_url:
+        required: true
+      video_url:
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  get:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          password: ${{ secrets.VDS_PASSWORD }}
+          command_timeout: 50m
+          envs: SCN_URL,VIDEO_URL
+          script: |
+            set -e
+            mkdir -p /opt/video/out && cd /opt/video
+            command -v ffmpeg >/dev/null || (apt-get update -qq >/dev/null && apt-get install -y -qq ffmpeg >/dev/null 2>&1)
+            curl -sSL "$SCN_URL" -o scn_new.json
+            {
+              echo "scn bytes $(stat -c%s scn_new.json)"
+              if [ ! -s new.mp4 ]; then
+                META=$(curl -s "https://cloud-api.yandex.net/v1/disk/public/resources?public_key=$VIDEO_URL&limit=50")
+                P=$(echo "$META" | python3 -c '
+            import sys, json
+            d = json.load(sys.stdin)
+            if d.get("type") == "dir":
+                vids = [i for i in d.get("_embedded", {}).get("items", []) if (i.get("mime_type") or "").startswith("video")]
+                print(vids[0]["path"] if vids else "")
+            ' || true)
+                echo "meta $(echo "$META" | head -c 400)"
+                HREF=$(curl -s "https://cloud-api.yandex.net/v1/disk/public/resources/download?public_key=$VIDEO_URL${P:+&path=$P}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("href",""))')
+                curl -sL "$HREF" -o new.mp4
+              fi
+              ls -la /opt/video /opt/video/out
+              for f in new.mp4 out/tri_zvonochka.mp4 src.mp4 oct.mp4; do
+                [ -s "$f" ] && echo "$f $(du -h $f | cut -f1) dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 $f) $(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 $f)"
+              done
+            } > info.txt 2>&1
+            cat info.txt
+        env:
+          SCN_URL: ${{ github.event.inputs.scn_url }}
+          VIDEO_URL: ${{ github.event.inputs.video_url }}
+
+      - name: save to scn-data
+        run: |
+          sudo apt-get install -y -qq sshpass >/dev/null
+          mkdir d && cd d
+          for f in scn_new.json info.txt; do sshpass -p "$PASS" scp -o StrictHostKeyChecking=no "$USER_@$HOST:/opt/video/$f" $f; done
+          git init -q && git checkout -q -b scn-data
+          git config user.name bot && git config user.email bot@users.noreply.github.com
+          git add . && git commit -qm "scenario $(date -u +%FT%TZ)"
+          git push -qf "https://x-access-token:${GH}@github.com/${{ github.repository }}" scn-data
+        env:
+          PASS: ${{ secrets.VDS_PASSWORD }}
+          USER_: ${{ secrets.VDS_USER }}
+          HOST: ${{ secrets.VDS_HOST }}
+          GH: ${{ secrets.GITHUB_TOKEN }}
