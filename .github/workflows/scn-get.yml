@@ -1,13 +1,12 @@
 name: scn-get
 
-# Забирает сценарий автовебинара из Бизона и новое видео с Яндекс Диска на VDS,
-# а сценарий и сводку кладёт в ветку scn-data (чтобы их можно было править).
+# Скачивает новое видео с Яндекс Диска на VDS и сопоставляет его по звуку
+# со старой записью (oct.mp4): где вырезан кусок и на сколько сдвинуто.
+# Результат - в ветке scn-data (align.txt).
 
 on:
   workflow_dispatch:
     inputs:
-      scn_url:
-        required: true
       video_url:
         required: true
 
@@ -19,51 +18,59 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - uses: actions/checkout@v4
+      - uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          password: ${{ secrets.VDS_PASSWORD }}
+          source: "tools/align.py"
+          target: /opt/video
       - uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VDS_HOST }}
           username: ${{ secrets.VDS_USER }}
           password: ${{ secrets.VDS_PASSWORD }}
           command_timeout: 50m
-          envs: SCN_URL,VIDEO_URL
+          envs: VIDEO_URL
           script: |
-            set -e
             mkdir -p /opt/video/out && cd /opt/video
             command -v ffmpeg >/dev/null || (apt-get update -qq >/dev/null && apt-get install -y -qq ffmpeg >/dev/null 2>&1)
-            curl -sSL "$SCN_URL" -o scn_new.json
-            {
-              echo "scn bytes $(stat -c%s scn_new.json)"
-              if [ ! -s new.mp4 ]; then
-                META=$(curl -s "https://cloud-api.yandex.net/v1/disk/public/resources?public_key=$VIDEO_URL&limit=50")
-                P=$(echo "$META" | python3 -c '
-            import sys, json
-            d = json.load(sys.stdin)
-            if d.get("type") == "dir":
-                vids = [i for i in d.get("_embedded", {}).get("items", []) if (i.get("mime_type") or "").startswith("video")]
-                print(vids[0]["path"] if vids else "")
-            ' || true)
-                echo "meta $(echo "$META" | head -c 400)"
-                HREF=$(curl -s "https://cloud-api.yandex.net/v1/disk/public/resources/download?public_key=$VIDEO_URL${P:+&path=$P}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("href",""))')
-                curl -sL "$HREF" -o new.mp4
-              fi
-              ls -la /opt/video /opt/video/out
-              for f in new.mp4 out/tri_zvonochka.mp4 src.mp4 oct.mp4; do
-                [ -s "$f" ] && echo "$f $(du -h $f | cut -f1) dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 $f) $(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 $f)"
+            [ -x venv/bin/python ] || python3 -m venv venv
+            venv/bin/python -c "import numpy" 2>/dev/null || venv/bin/pip install -q numpy
+            exec > info.txt 2>&1
+            ls -la /opt/video /opt/video/out
+            if [ ! -s new.mp4 ]; then
+              ID="${VIDEO_URL##*/}"
+              for K in "$VIDEO_URL" "https://disk.yandex.ru/d/$ID" "https://yadi.sk/d/$ID"; do
+                META=$(curl -s "https://cloud-api.yandex.net/v1/disk/public/resources?public_key=$K&limit=50")
+                echo "meta $K: $(echo "$META" | head -c 500)"
+                P=$(echo "$META" | python3 -c 'import sys,json
+            d=json.load(sys.stdin)
+            if d.get("type")=="dir":
+                v=[i for i in d.get("_embedded",{}).get("items",[]) if (i.get("mime_type") or "").startswith("video")]
+                print(v[0]["path"] if v else "")' 2>/dev/null)
+                HREF=$(curl -s -G "https://cloud-api.yandex.net/v1/disk/public/resources/download" --data-urlencode "public_key=$K" ${P:+--data-urlencode "path=$P"} | python3 -c 'import sys,json;print(json.load(sys.stdin).get("href",""))' 2>/dev/null)
+                [ -n "$HREF" ] && break
               done
-            } > info.txt 2>&1
-            cat info.txt
+              [ -n "$HREF" ] && curl -sL "$HREF" -o new.mp4 || echo "NO HREF"
+            fi
+            for f in new.mp4 oct.mp4 src.mp4 out/tri_zvonochka.mp4; do
+              [ -s "$f" ] && echo "$f $(du -h $f | cut -f1) dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 $f)"
+            done
+            [ -s new.mp4 ] && [ -s oct.mp4 ] && venv/bin/python align.py new.mp4 oct.mp4
+            true
         env:
-          SCN_URL: ${{ github.event.inputs.scn_url }}
           VIDEO_URL: ${{ github.event.inputs.video_url }}
-
       - name: save to scn-data
         run: |
           sudo apt-get install -y -qq sshpass >/dev/null
           mkdir d && cd d
-          for f in scn_new.json info.txt; do sshpass -p "$PASS" scp -o StrictHostKeyChecking=no "$USER_@$HOST:/opt/video/$f" $f; done
+          sshpass -p "$PASS" scp -o StrictHostKeyChecking=no "$USER_@$HOST:/opt/video/info.txt" info.txt
+          cat info.txt | head -60
           git init -q && git checkout -q -b scn-data
           git config user.name bot && git config user.email bot@users.noreply.github.com
-          git add . && git commit -qm "scenario $(date -u +%FT%TZ)"
+          git add . && git commit -qm "align $(date -u +%FT%TZ)"
           git push -qf "https://x-access-token:${GH}@github.com/${{ github.repository }}" scn-data
         env:
           PASS: ${{ secrets.VDS_PASSWORD }}
