@@ -43,8 +43,8 @@ jobs:
             python3 tools/yadisk.py "$VIDEO_URL" > vids.tsv
             echo "src.mp4 dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 src.mp4)"
             while IFS=$'\t' read -r SIZE MOD P HREF; do
-              echo "=== $P size=$SIZE modified=$MOD dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$HREF")"
-              venv/bin/python tools/align.py "$HREF" src.mp4
+              echo "=== $P size=$SIZE modified=$MOD dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$HREF" </dev/null)"
+              venv/bin/python tools/align.py "$HREF" src.mp4 </dev/null
             done < vids.tsv
             true
         env:
