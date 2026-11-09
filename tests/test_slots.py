@@ -229,3 +229,52 @@ def test_owner_transfer(tmp_path, monkeypatch):
     assert r.get_user(con, "2")["role"] == "owner" and r.get_user(con, "1")["role"] == "admin"
     q["data"] = "own:1:yes"   # бывший владелец больше не может
     assert r.process([{"callback_query": q}], con)[0][1][1] == "Это может только владелец"
+
+
+def test_nudge_30m(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    clock = {"now": t(16, 40)}
+    monkeypatch.setattr(m, "now_msk", lambda: clock["now"])
+    assert m.started_endpoint("a")["delay_nudge"] == 1800
+    clock["now"] = t(17, 10)
+    r = m.nudge_endpoint("a", "30m")
+    assert r["ok"] == 1 and r["b1"] == "Сегодня 19:00 по МСК" and r["text"]
+    assert m.nudge_endpoint("a", "30m")["ok"] == 0  # повтор не шлём
+
+
+def test_nudge_skipped_after_choice(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    clock = {"now": t(16, 40)}
+    monkeypatch.setattr(m, "now_msk", lambda: clock["now"])
+    m.started_endpoint("b")
+    clock["now"] = t(16, 45)
+    m.resolve_endpoint(text="Сегодня 19:00 по МСК", ts=None, client_id="b")
+    clock["now"] = t(17, 10)
+    assert m.nudge_endpoint("b", "30m")["ok"] == 0
+    clock["now"] = t(16, 40, d=31)
+    assert m.nudge_endpoint("b", "day")["ok"] == 0  # дожим «завтра» тоже молчит
+
+
+def test_nudge_restart_waits_new_timer(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    clock = {"now": t(16, 40)}
+    monkeypatch.setattr(m, "now_msk", lambda: clock["now"])
+    m.started_endpoint("c")
+    clock["now"] = t(17, 0)
+    m.started_endpoint("c")  # нажал /start ещё раз
+    clock["now"] = t(17, 10)
+    assert m.nudge_endpoint("c", "30m")["ok"] == 0  # старый таймер
+    clock["now"] = t(17, 30)
+    assert m.nudge_endpoint("c", "30m")["ok"] == 1  # новый
+
+
+def test_nudge_without_started_call(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setattr(m, "now_msk", lambda: t(12))
+    m.resolve_endpoint(text="Сегодня 14:00 по МСК", ts=None, client_id="d")
+    assert m.nudge_endpoint("d", "day")["ok"] == 0
+    assert m.nudge_endpoint("e", "day")["ok"] == 1

@@ -292,6 +292,7 @@ def db():
     con.execute("create table if not exists reg_log (client_id text, ts integer, reg_at integer)")
     con.execute("create table if not exists visits (client_id text, ts integer, visited integer, "
                 "minutes real, segment text, primary key (client_id, ts))")
+    con.execute("create table if not exists starts (client_id text primary key, started_at integer)")
     return con
 
 
@@ -349,6 +350,56 @@ def due_endpoint(client_id: str = Query(...), step: str = Query(..., pattern="^(
     text = HOUR_TEXT.format(head=head, time=f"{s:%H:%M}") if step == "hour" else LINK_TEXT
     return {"ok": 1, "text": text, "time": f"{s:%H:%M}"}
 
+# --- Дожим тех, кто запустил бота, но не выбрал время ------------------------
+#
+# Сейлбот после приветствия вызывает /started и ставит таймер на delay_nudge
+# секунд (по умолчанию 30 минут). Когда таймер сработал, бот вызывает /nudge:
+# ok=1 - человек так и не записался, шлём напоминание с актуальными кнопками;
+# ok=0 - уже выбрал время (или повтор/устаревший таймер), ничего не шлём.
+# Тот же /nudge с step=day защищает дожим «завтра» от отправки записавшимся.
+
+NUDGE_MIN = int(os.getenv("NUDGE_MIN", "30"))
+NUDGE_TEXT = ("Видимо, вас что-то отвлекло 😊\n"
+              "Осталось выбрать удобное время эфира - участие бесплатное 👇")
+
+
+def save_start(client_id: str, started_at: int) -> None:
+    with _lock, db() as con:
+        con.execute("insert into starts values (?, ?) on conflict(client_id) do update set "
+                    "started_at = excluded.started_at", (client_id, started_at))
+
+
+def claim_nudge(client_id: str, step: str, now_ts: int) -> bool:
+    with _lock, db() as con:
+        row = con.execute("select started_at from starts where client_id = ?", (client_id,)).fetchone()
+        started_at = row[0] if row else 0
+        # таймер от прошлого /start, а человек нажал /start ещё раз - ждём таймер нового
+        if started_at and now_ts - started_at < NUDGE_MIN * 60 - 120:
+            return False
+        # записался после приветствия (или раньше, если /started не вызывали) - не дожимаем
+        reg = con.execute("select 1 from reg_log where client_id = ? and reg_at >= ? limit 1",
+                          (client_id, started_at)).fetchone()
+        if reg:
+            return False
+        cur = con.execute("insert or ignore into sent values (?, ?, ?)",
+                          (client_id, started_at, f"nudge_{step}"))
+        return bool(cur.rowcount)
+
+
+@app.get("/started")
+def started_endpoint(client_id: str = Query(...)):
+    save_start(client_id, int(now_msk().timestamp()))
+    return {"ok": 1, "delay_nudge": NUDGE_MIN * 60}
+
+
+@app.get("/nudge")
+def nudge_endpoint(client_id: str = Query(...), step: str = Query("30m", pattern="^(30m|day)$")):
+    now = now_msk()
+    if not claim_nudge(client_id, step, int(now.timestamp())):
+        return {"ok": 0, "text": "", **{f"b{i}": "" for i in range(1, MAX_SLOTS + 1)}}
+    s = build(now)
+    return {"ok": 1, "text": NUDGE_TEXT, **{f"b{i}": s[f"b{i}"] for i in range(1, MAX_SLOTS + 1)},
+            **{f"bts{i}": s[f"bts{i}"] for i in range(1, MAX_SLOTS + 1)}}
 
 
 # --- Сегменты по времени просмотра ------------------------------------------
