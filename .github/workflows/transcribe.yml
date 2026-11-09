@@ -1,0 +1,49 @@
+name: transcribe
+
+# Расшифровка речи вебинара (как в новом видео: src 393.44-988.3 + 1240.3-конец).
+# Звук режется на VDS, распознаётся на раннере (faster-whisper), текст - в ветку scn-data.
+on: workflow_dispatch
+
+permissions:
+  contents: write
+
+jobs:
+  tr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          password: ${{ secrets.VDS_PASSWORD }}
+          command_timeout: 20m
+          script: |
+            cd /opt/video
+            ffmpeg -v error -y -ss 393.44 -to 988.3 -i src.mp4 -vn -ac 1 -ar 16000 -c:a libopus -b:a 24k a1.ogg </dev/null
+            ffmpeg -v error -y -ss 1240.3 -i src.mp4 -vn -ac 1 -ar 16000 -c:a libopus -b:a 24k a2.ogg </dev/null
+            ls -la a1.ogg a2.ogg
+      - run: |
+          sudo apt-get install -y -qq sshpass >/dev/null
+          for f in a1 a2; do sshpass -p "$PASS" scp -o StrictHostKeyChecking=no "$USER_@$HOST:/opt/video/$f.ogg" $f.ogg; done
+          pip install -q faster-whisper
+          python - <<'PY'
+          from faster_whisper import WhisperModel
+          m = WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=4)
+          out = open("transcript.txt", "w")
+          # время - как в новом видео: второй кусок начинается с 594.86 сек
+          for f, base in (("a1.ogg", 0.0), ("a2.ogg", 988.3 - 393.44)):
+              segs, _ = m.transcribe(f, language="ru", beam_size=1, vad_filter=True)
+              for s in segs:
+                  t = base + s.start
+                  out.write(f"{int(t//60):02d}:{int(t%60):02d} {s.text.strip()}\n"); out.flush()
+          PY
+          wc -l transcript.txt
+          git clone -q --depth 1 -b scn-data "https://x-access-token:${GH}@github.com/${{ github.repository }}" d
+          cp transcript.txt d/ && cd d && git config user.name bot && git config user.email bot@users.noreply.github.com
+          git add . && git commit -qm transcript && git push -q
+        env:
+          PASS: ${{ secrets.VDS_PASSWORD }}
+          USER_: ${{ secrets.VDS_USER }}
+          HOST: ${{ secrets.VDS_HOST }}
+          GH: ${{ secrets.GITHUB_TOKEN }}
