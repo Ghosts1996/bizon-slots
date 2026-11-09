@@ -26,6 +26,7 @@ jobs:
       - run: |
           sudo apt-get install -y -qq sshpass >/dev/null
           for f in a1 a2; do sshpass -p "$PASS" scp -o StrictHostKeyChecking=no "$USER_@$HOST:/opt/video/$f.ogg" $f.ogg; done
+          sudo apt-get install -y -qq ffmpeg >/dev/null
           pip install -q faster-whisper
           python - <<'PY'
           import subprocess, numpy as np
