@@ -57,7 +57,8 @@ jobs:
         if: hashFiles('skip.flag') == ''
         run: |
           pip install -q numpy
-          sudo apt-get install -y -qq sshpass >/dev/null
+          sudo apt-get update -qq >/dev/null
+          sudo apt-get install -y -qq sshpass ffmpeg >/dev/null
           sshpass -p "$PASS" scp -o StrictHostKeyChecking=no "$USER_@$HOST:/opt/video/new.mp4" new.mp4
           ls -la new.mp4
         env:
@@ -66,7 +67,8 @@ jobs:
           HOST: ${{ secrets.VDS_HOST }}
       - name: Заменить заставку
         if: hashFiles('skip.flag') == ''
-        run: python3 tools/bluefix.py new.mp4 assets/cover.jpg "$OUT" | grep -v "^frame=" | tee bluefix.txt
+        shell: bash
+        run: python3 tools/bluefix.py new.mp4 assets/cover.jpg "$OUT" 2>&1 | tr '\r' '\n' | grep -v "^frame=" | tee bluefix.txt
         env:
           OUT: ${{ github.event.inputs.out }}
       - name: Проверка
