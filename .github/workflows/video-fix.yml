@@ -1,0 +1,108 @@
+name: video-fix
+
+# Новое видео с Яндекс Диска: синяя заставка с датой закрывается обложкой (tools/bluefix.py),
+# длина и звук не меняются. Результат кладётся на VDS в /opt/video/out, кадры для проверки - в ветку scn-data.
+# Кодирование идёт на раннере, чтобы не грузить боевой сервер.
+on:
+  workflow_dispatch:
+    inputs:
+      folder:
+        default: "https://disk.360.yandex.ru/d/ZiaGhrxbkO9PmA"
+      match:
+        default: "8окт"
+      out:
+        default: "tri_zvonochka_v2.mp4"
+      list_only:
+        default: "false"
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Список видео на Диске
+        run: |
+          pip install -q numpy
+          python3 tools/yadisk.py "$FOLDER" > vids.tsv
+          echo "== видео на Диске"; cut -f1-3 vids.tsv
+          [ "$LIST_ONLY" = "true" ] && echo "list_only" > skip.flag || true
+        env:
+          FOLDER: ${{ github.event.inputs.folder }}
+          LIST_ONLY: ${{ github.event.inputs.list_only }}
+      - name: Скачать
+        if: hashFiles('skip.flag') == ''
+        run: |
+          [ "$(grep -cF "$MATCH" vids.tsv)" = "1" ] || { echo "нужно ровно одно совпадение с '$MATCH'"; exit 1; }
+          HREF=$(grep -F "$MATCH" vids.tsv | cut -f4)
+          curl -sL --retry 3 "$HREF" -o new.mp4
+          ls -la new.mp4
+          ffprobe -v error -show_entries format=duration:stream=codec_name,width,height,r_frame_rate -of compact new.mp4
+        env:
+          MATCH: ${{ github.event.inputs.match }}
+      - name: Заменить заставку
+        if: hashFiles('skip.flag') == ''
+        run: python3 tools/bluefix.py new.mp4 assets/cover.jpg "$OUT" | grep -v "^frame=" | tee bluefix.txt
+        env:
+          OUT: ${{ github.event.inputs.out }}
+      - name: Проверка
+        if: hashFiles('skip.flag') == ''
+        run: |
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-rus >/dev/null
+          python3 - <<'PY' | tee check.txt
+          import json, os, subprocess, re
+          out = os.environ["OUT"]
+          j = json.load(open(out + ".json"))
+          print("DUR", round(j["dur_in"], 2), "->", round(j["dur_out"], 2))
+          md5 = lambda f: subprocess.run(["ffmpeg", "-v", "error", "-i", f, "-map", "0:a", "-c", "copy", "-f", "md5", "-"],
+                                         capture_output=True, text=True).stdout.strip()
+          print("AUDIO_SAME", md5("new.mp4") == md5(out))
+          times = [60, 1800]
+          for s, e in j["ranges"]:
+              e = min(e, j["dur_out"] - 0.05)
+              times += [max(s - 1, 0), s + 0.5, (s + e) / 2, e - 0.5, min(e + 1, j["dur_out"] - 0.05)]
+          times = sorted(set(round(t, 2) for t in times))
+          os.makedirs("fr", exist_ok=True)
+          bad = []
+          for i, t in enumerate(times):
+              f = f"fr/{i:03d}.jpg"
+              subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", str(t), "-i", out, "-frames:v", "1", f], check=True)
+              txt = subprocess.run(["tesseract", f, "-", "-l", "rus"], capture_output=True, text=True).stdout.lower()
+              hit = re.search(r"октябр|19[.:]30|прямой эфир натальи", txt)
+              print(f"T {int(t)//60}:{t%60:05.2f}", "ДАТА!" if hit else "ok", repr(txt.strip()[:60]))
+              if hit:
+                  bad.append(t)
+          print("DATE_LEFT", bad)
+          json.dump(times, open("times.json", "w"))
+          PY
+        env:
+          OUT: ${{ github.event.inputs.out }}
+      - name: Лист кадров
+        if: hashFiles('skip.flag') == ''
+        run: |
+          N=$(ls fr/*.jpg | wc -l)
+          ffmpeg -v error -y -i fr/%03d.jpg -vf "scale=320:-1,tile=5x$(( (N+4)/5 ))" -frames:v 1 fix_sheet.jpg
+          ls -la fix_sheet.jpg
+      - name: Положить на VDS
+        if: hashFiles('skip.flag') == ''
+        run: |
+          sudo apt-get install -y -qq sshpass >/dev/null
+          sshpass -p "$PASS" scp -o StrictHostKeyChecking=no "$OUT" "$USER_@$HOST:/opt/video/out/$OUT"
+          sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$USER_@$HOST" "ls -la /opt/video/out/$OUT"
+        env:
+          OUT: ${{ github.event.inputs.out }}
+          PASS: ${{ secrets.VDS_PASSWORD }}
+          USER_: ${{ secrets.VDS_USER }}
+          HOST: ${{ secrets.VDS_HOST }}
+      - name: Кадры и отчёт в scn-data
+        if: hashFiles('skip.flag') == ''
+        run: |
+          git clone -q --depth 1 -b scn-data "https://x-access-token:${GH}@github.com/${{ github.repository }}" d
+          cp fix_sheet.jpg bluefix.txt check.txt d/
+          cd d && git config user.name bot && git config user.email bot@users.noreply.github.com
+          git add . && git commit -qm "video-fix" && git push -q
+        env:
+          GH: ${{ secrets.GITHUB_TOKEN }}
