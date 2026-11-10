@@ -1,0 +1,25 @@
+name: vid-ls
+
+# Что лежит на VDS в /opt/video: файлы, размеры, параметры видео. Только чтение.
+on: workflow_dispatch
+
+jobs:
+  ls:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          password: ${{ secrets.VDS_PASSWORD }}
+          command_timeout: 10m
+          script: |
+            echo "== disk"; df -h /opt | tail -1
+            echo "== ls"; ls -la /opt/video /opt/video/out 2>&1
+            echo "== probe"
+            for f in /opt/video/*.mp4 /opt/video/out/*.mp4; do
+              [ -f "$f" ] || continue
+              echo "$f $(du -h "$f" | cut -f1) dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$f") $(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 "$f") $(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,sample_rate -of csv=p=0 "$f")"
+            done
+            echo "== json/txt"; ls -la /opt/video/*.json /opt/video/*.txt 2>&1
+            echo "== tools"; which ffmpeg tesseract python3; python3 --version
