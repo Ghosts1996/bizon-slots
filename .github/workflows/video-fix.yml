@@ -39,13 +39,17 @@ jobs:
           envs: FOLDER,MATCH,LIST_ONLY
           script: |
             cd /opt/video
-            python3 tools/yadisk.py "$FOLDER" > vids.tsv
-            echo "== видео на Диске"; cut -f1-3 vids.tsv
+            if [ "$LIST_ONLY" = "true" ] || [ ! -s new.mp4 ]; then
+              python3 tools/yadisk.py "$FOLDER" > vids.tmp && mv vids.tmp vids.tsv
+              echo "== видео на Диске"; cut -f1-3 vids.tsv
+            fi
             [ "$LIST_ONLY" = "true" ] && exit 0
-            [ "$(grep -cF "$MATCH" vids.tsv)" = "1" ] || { echo "нужно ровно одно совпадение с $MATCH"; exit 1; }
             if [ ! -s new.mp4 ]; then
+              [ "$(grep -cF "$MATCH" vids.tsv)" = "1" ] || { echo "нужно ровно одно совпадение с $MATCH"; exit 1; }
               HREF=$(grep -F "$MATCH" vids.tsv | cut -f4)
+              WANT=$(grep -F "$MATCH" vids.tsv | cut -f1)
               curl -sL --retry 3 "$HREF" -o new.mp4
+              [ "$(stat -c%s new.mp4)" = "$WANT" ] || { echo "скачано не полностью"; rm -f new.mp4; exit 1; }
             fi
             ls -la new.mp4
             ffprobe -v error -show_entries format=duration:stream=codec_name,width,height,r_frame_rate -of compact new.mp4
