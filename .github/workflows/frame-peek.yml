@@ -1,0 +1,48 @@
+name: frame-peek
+
+# Несколько кадров в полном размере из готового файла на VDS -> ветка scn-data (peek/*.jpg). Только чтение.
+on:
+  workflow_dispatch:
+    inputs:
+      file:
+        default: "/opt/video/out/tri_zvonochka_v2.mp4"
+      times:
+        default: "1800,3300"
+
+permissions:
+  contents: write
+
+jobs:
+  peek:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          password: ${{ secrets.VDS_PASSWORD }}
+          command_timeout: 10m
+          envs: F,TIMES
+          script: |
+            rm -rf /opt/video/peek && mkdir -p /opt/video/peek && cd /opt/video/peek
+            i=0
+            for t in $(echo "$TIMES" | tr ',' ' '); do
+              ffmpeg -v error -y -ss "$t" -i "$F" -frames:v 1 -q:v 2 "$(printf %02d $i)_$t.jpg" </dev/null
+              i=$((i+1))
+            done
+            ls -la
+        env:
+          F: ${{ github.event.inputs.file }}
+          TIMES: ${{ github.event.inputs.times }}
+      - run: |
+          sudo apt-get install -y -qq sshpass >/dev/null
+          git clone -q --depth 1 -b scn-data "https://x-access-token:${GH}@github.com/${{ github.repository }}" d && cd d
+          rm -rf peek && mkdir peek
+          sshpass -p "$PASS" scp -o StrictHostKeyChecking=no "$USER_@$HOST:/opt/video/peek/*.jpg" peek/
+          git config user.name bot && git config user.email bot@users.noreply.github.com
+          git add . && git commit -qm peek && git push -q
+        env:
+          PASS: ${{ secrets.VDS_PASSWORD }}
+          USER_: ${{ secrets.VDS_USER }}
+          HOST: ${{ secrets.VDS_HOST }}
+          GH: ${{ secrets.GITHUB_TOKEN }}
