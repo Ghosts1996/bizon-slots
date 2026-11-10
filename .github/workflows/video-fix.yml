@@ -24,25 +24,46 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
-      - name: Список видео на Диске
-        run: |
-          pip install -q numpy
-          python3 tools/yadisk.py "$FOLDER" > vids.tsv
-          echo "== видео на Диске"; cut -f1-3 vids.tsv
-          [ "$LIST_ONLY" = "true" ] && echo "list_only" > skip.flag || true
+      - name: Режим
+        run: '[ "$LIST_ONLY" = "true" ] && echo list > skip.flag || true'
+        env:
+          LIST_ONLY: ${{ github.event.inputs.list_only }}
+      # С раннера Яндекс отвечает 429, поэтому скачивание делает VDS (как в scn-get)
+      - name: Скачать на VDS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          password: ${{ secrets.VDS_PASSWORD }}
+          command_timeout: 40m
+          envs: FOLDER,MATCH,LIST_ONLY
+          script: |
+            cd /opt/video
+            python3 tools/yadisk.py "$FOLDER" > vids.tsv
+            echo "== видео на Диске"; cut -f1-3 vids.tsv
+            [ "$LIST_ONLY" = "true" ] && exit 0
+            [ "$(grep -cF "$MATCH" vids.tsv)" = "1" ] || { echo "нужно ровно одно совпадение с $MATCH"; exit 1; }
+            if [ ! -s new.mp4 ]; then
+              HREF=$(grep -F "$MATCH" vids.tsv | cut -f4)
+              curl -sL --retry 3 "$HREF" -o new.mp4
+            fi
+            ls -la new.mp4
+            ffprobe -v error -show_entries format=duration:stream=codec_name,width,height,r_frame_rate -of compact new.mp4
         env:
           FOLDER: ${{ github.event.inputs.folder }}
+          MATCH: ${{ github.event.inputs.match }}
           LIST_ONLY: ${{ github.event.inputs.list_only }}
-      - name: Скачать
+      - name: Забрать на раннер
         if: hashFiles('skip.flag') == ''
         run: |
-          [ "$(grep -cF "$MATCH" vids.tsv)" = "1" ] || { echo "нужно ровно одно совпадение с '$MATCH'"; exit 1; }
-          HREF=$(grep -F "$MATCH" vids.tsv | cut -f4)
-          curl -sL --retry 3 "$HREF" -o new.mp4
+          pip install -q numpy
+          sudo apt-get install -y -qq sshpass >/dev/null
+          sshpass -p "$PASS" scp -o StrictHostKeyChecking=no "$USER_@$HOST:/opt/video/new.mp4" new.mp4
           ls -la new.mp4
-          ffprobe -v error -show_entries format=duration:stream=codec_name,width,height,r_frame_rate -of compact new.mp4
         env:
-          MATCH: ${{ github.event.inputs.match }}
+          PASS: ${{ secrets.VDS_PASSWORD }}
+          USER_: ${{ secrets.VDS_USER }}
+          HOST: ${{ secrets.VDS_HOST }}
       - name: Заменить заставку
         if: hashFiles('skip.flag') == ''
         run: python3 tools/bluefix.py new.mp4 assets/cover.jpg "$OUT" | grep -v "^frame=" | tee bluefix.txt
