@@ -1,0 +1,48 @@
+name: blue-scan
+
+# Где в src.mp4 показана синяя заставка (с датой): диапазоны по секундам. Только чтение.
+on: workflow_dispatch
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          password: ${{ secrets.VDS_PASSWORD }}
+          command_timeout: 40m
+          script: |
+            cd /opt/video
+            /opt/video/venv/bin/python - <<'PY'
+            import subprocess, numpy as np
+            W, H = 64, 36
+            p = subprocess.Popen(["ffmpeg", "-v", "error", "-i", "src.mp4", "-vf", f"fps=1,scale={W}:{H}",
+                                  "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                                 stdout=subprocess.PIPE, stdin=subprocess.DEVNULL)
+            fs = W * H * 3
+            vals = []
+            while True:
+                b = p.stdout.read(fs)
+                if len(b) < fs:
+                    break
+                a = np.frombuffer(b, np.uint8).reshape(H, W, 3).astype(int)
+                r, bl = a[..., 0], a[..., 2]
+                vals.append(float(((bl > 150) & (r < 110) & (bl - r > 80)).mean()))
+            fmt = lambda s: f"{int(s)//60}:{int(s)%60:02d}"
+            on = [v > 0.4 for v in vals]
+            ranges, i = [], 0
+            while i < len(on):
+                if on[i]:
+                    j = i
+                    while j + 1 < len(on) and on[j + 1]:
+                        j += 1
+                    ranges.append((i, j + 1)); i = j + 1
+                else:
+                    i += 1
+            print("FRAMES", len(vals))
+            for s, e in ranges:
+                print("BLUE", fmt(s), fmt(e), f"{e - s}s", f"({s}-{e})")
+            print("MAXOUTSIDE", max([v for k, v in enumerate(vals) if not any(s <= k < e for s, e in ranges)] or [0]))
+            PY
