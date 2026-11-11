@@ -55,6 +55,14 @@ jobs:
                 for v in vs:
                     v2 = {k: v.get(k) for k in v if k not in ("vi", "messages")}
                     print("  V", json.dumps(v2, ensure_ascii=False)[:600])
+                try:
+                    rep = bizon_get("webinars/reports/get", {"webinarId": wid}).get("report") or {}
+                    r2 = rep.get("report")
+                    r2 = json.loads(r2) if isinstance(r2, str) else (r2 or {})
+                    for uid, m in (r2.get("usersMeta") or {}).items():
+                        print("  META", uid, json.dumps(m, ensure_ascii=False)[:400])
+                except Exception as e:
+                    print("  META ERR", e)
             PY
             echo "== journal"
             journalctl -u bizon-slots --since "$(date -d '-10 hours' '+%F %T')" --no-pager | grep -oE '"GET /(started|nudge|visited|resolve|due)[^"]*" [0-9]+' | tail -150
