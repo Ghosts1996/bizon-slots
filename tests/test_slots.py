@@ -328,4 +328,4 @@ def test_slots_with_client_marks_start(tmp_path, monkeypatch):
     clock["now"] = datetime(2026, 11, 11, 16, 6, tzinfo=MSK)
     assert m.nudge_endpoint(client_id="k1", step="30m")["ok"] == 1
     assert m.nudge_endpoint(client_id="k1", step="30m")["ok"] == 0   # только один раз
-    assert m.slots()["b1"]                                            # без client_id как раньше
+    assert m.slots(client_id=None)["b1"]                                          # без client_id как раньше
