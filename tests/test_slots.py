@@ -314,8 +314,10 @@ def test_room_link_has_client_id(tmp_path, monkeypatch):
     import app.main as m
     monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
     monkeypatch.setattr(m, "now_msk", lambda: datetime(2026, 11, 11, 15, 34, tzinfo=MSK))
-    r = m.resolve_endpoint(text="Сегодня 16:00 по МСК", ts=None, client_id="1060306770")
-    assert r["room_link"].endswith("?salebot=1060306770")
+    r = m.resolve_endpoint(text="Сегодня 16:00 по МСК", ts=None, client_id="1060306770", name="Алексей")
+    assert "salebot=1060306770" in r["room_link"] and "autologin=1" in r["room_link"]
+    assert "username=%D0%90%D0%BB%D0%B5%D0%BA%D1%81%D0%B5%D0%B9" in r["room_link"]
+    assert "username=%D0%A3%D1%87" in m.room_link("x", "#{name}")  # пустое имя -> «Участник»
 
 
 def test_slots_with_client_marks_start(tmp_path, monkeypatch):

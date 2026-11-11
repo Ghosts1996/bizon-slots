@@ -171,12 +171,13 @@ def resolve_ts(ts: int, now: datetime) -> dict:
 @app.get("/resolve")
 def resolve_endpoint(text: str = Query(None, description="Текст нажатой кнопки"),
                      ts: int = Query(None, description="Unix-время сеанса из /slots"),
-                     client_id: str = Query(None, description="client_id из Сейлбота")):
+                     client_id: str = Query(None, description="client_id из Сейлбота"),
+                     name: str = Query(None, description="Имя клиента для входа в комнату без формы")):
     now = now_msk()
     r = resolve_ts(ts, now) if ts else resolve(text or "", now)
     if client_id and r.get("valid"):
         save_registration(client_id, int(r["ts"]), int(now.timestamp()))
-        r["room_link"] = room_link(client_id)  # room_url не трогаем: в блоках Сейлбота к нему уже могут дописывать ?salebot=
+        r["room_link"] = room_link(client_id, name)
     return r
 
 
@@ -211,9 +212,21 @@ def is_tagged(v: dict) -> bool:
     return "salebot=" in json.dumps(v, ensure_ascii=False) or bool(v.get("salebot"))
 
 
-def room_link(client_id: str = "") -> str:
+def room_link(client_id: str = "", name: str = "") -> str:
+    """Ссылка на комнату Бизона сразу в эфир, без формы «Введите имя».
+
+    Если Бизон показывает форму, после неё зритель попадает в отчёт без
+    salebot=<id>, и бот не может понять, что человек был на эфире.
+    username + autologin=1 пропускают форму, метка salebot сохраняется.
+    """
     room = os.getenv("ROOM_URL", "https://start.bizon365.ru/room/209601/avtoweb")
-    return f"{room}?salebot={urllib.parse.quote(str(client_id))}" if client_id else room
+    if not client_id:
+        return room
+    name = name.strip() if isinstance(name, str) else ""
+    if not name or name.startswith("#{"):
+        name = "Участник"
+    q = urllib.parse.urlencode({"salebot": client_id, "username": name[:60], "autologin": 1})
+    return f"{room}?{q}"
 
 
 def check_visit(client_id: str, ts: int) -> dict:
@@ -356,7 +369,8 @@ LINK_TEXT = ("🎬 Через 5 минут встречаемся!\nЖмите �
 
 
 @app.get("/due")
-def due_endpoint(client_id: str = Query(...), step: str = Query(..., pattern="^(hour|link|record)$")):
+def due_endpoint(client_id: str = Query(...), step: str = Query(..., pattern="^(hour|link|record)$"),
+                 name: str = Query(None)):
     now = now_msk()
     ts = claim_step(client_id, step, int(now.timestamp()))
     if ts is None:
@@ -368,7 +382,7 @@ def due_endpoint(client_id: str = Query(...), step: str = Query(..., pattern="^(
     left = ts - int(now.timestamp())
     head = "Через час встречаемся!" if left > 50 * 60 else "Совсем скоро начинаем!"
     text = HOUR_TEXT.format(head=head, time=f"{s:%H:%M}") if step == "hour" else LINK_TEXT
-    return {"ok": 1, "text": text, "time": f"{s:%H:%M}", "url": room_link(client_id)}
+    return {"ok": 1, "text": text, "time": f"{s:%H:%M}", "url": room_link(client_id, name)}
 
 # --- Дожим тех, кто запустил бота, но не выбрал время ------------------------
 #
