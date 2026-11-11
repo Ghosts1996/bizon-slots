@@ -389,17 +389,29 @@ def save_start(client_id: str, started_at: int) -> None:
                     "started_at = excluded.started_at", (client_id, started_at))
 
 
+# Дожимы после /start: шаг -> через сколько минут после приветствия.
+NUDGE_STEPS = {"30m": NUDGE_MIN, "1h": 60, "2h": 120}
+NUDGE_EARLY = 120          # таймер Сейлбота может сработать чуть раньше/позже
+DAY_AFTER_START = 150      # «завтра»-дожим не мешает цепочке 30м/1ч/2ч
+
+
 def claim_nudge(client_id: str, step: str, now_ts: int) -> bool:
+    """True - дожим этого шага надо отправить (и он помечен отправленным)."""
     with _lock, db() as con:
         row = con.execute("select started_at from starts where client_id = ?", (client_id,)).fetchone()
         started_at = row[0] if row else 0
-        # таймер от прошлого /start, а человек нажал /start ещё раз - ждём таймер нового
-        if started_at and now_ts - started_at < NUDGE_MIN * 60 - 120:
+        if started_at:
+            age = now_ts - started_at
+            if step in NUDGE_STEPS and age < NUDGE_STEPS[step] * 60 - NUDGE_EARLY:
+                return False  # таймер от прошлого /start, а человек нажал /start ещё раз
+            if step == "day" and age < DAY_AFTER_START * 60:
+                return False  # идёт цепочка дожимов после /start, лишний не шлём
+        # выбрал время после приветствия - не дожимаем
+        if con.execute("select 1 from reg_log where client_id = ? and reg_at >= ? limit 1",
+                       (client_id, started_at)).fetchone():
             return False
-        # записался после приветствия (или раньше, если /started не вызывали) - не дожимаем
-        reg = con.execute("select 1 from reg_log where client_id = ? and reg_at >= ? limit 1",
-                          (client_id, started_at)).fetchone()
-        if reg:
+        # уже записан на будущий сеанс (записался раньше и снова нажал /start) - тоже не дожимаем
+        if con.execute("select 1 from reg where client_id = ? and ts > ?", (client_id, now_ts)).fetchone():
             return False
         cur = con.execute("insert or ignore into sent values (?, ?, ?)",
                           (client_id, started_at, f"nudge_{step}"))
@@ -413,7 +425,7 @@ def started_endpoint(client_id: str = Query(...)):
 
 
 @app.get("/nudge")
-def nudge_endpoint(client_id: str = Query(...), step: str = Query("30m", pattern="^(30m|day)$")):
+def nudge_endpoint(client_id: str = Query(...), step: str = Query("30m", pattern="^(30m|1h|2h|day)$")):
     now = now_msk()
     if not claim_nudge(client_id, step, int(now.timestamp())):
         return {"ok": 0, "text": "", **{f"b{i}": "" for i in range(1, MAX_SLOTS + 1)}}

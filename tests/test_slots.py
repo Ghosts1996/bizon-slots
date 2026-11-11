@@ -329,3 +329,60 @@ def test_slots_with_client_marks_start(tmp_path, monkeypatch):
     assert m.nudge_endpoint(client_id="k1", step="30m")["ok"] == 1
     assert m.nudge_endpoint(client_id="k1", step="30m")["ok"] == 0   # только один раз
     assert m.slots(client_id=None)["b1"]                                          # без client_id как раньше
+
+
+def _nudge_env(tmp_path, monkeypatch, start=(16, 0)):
+    import app.main as m
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    clock = {"now": t(*start)}
+    monkeypatch.setattr(m, "now_msk", lambda: clock["now"])
+    return m, clock
+
+
+def test_three_nudges_30m_1h_2h(tmp_path, monkeypatch):
+    m, clock = _nudge_env(tmp_path, monkeypatch, (10, 0))
+    m.slots(client_id="n")
+    for hh, mm, step in [(10, 30, "30m"), (11, 0, "1h"), (12, 0, "2h")]:
+        clock["now"] = t(hh, mm)
+        assert m.nudge_endpoint("n", step)["ok"] == 1, step
+        assert m.nudge_endpoint("n", step)["ok"] == 0, step  # повтор того же шага не шлём
+    clock["now"] = t(11, 0)
+    assert m.nudge_endpoint("n", "day")["ok"] == 0          # «завтра» не добавляет четвёртый
+
+
+def test_nudges_stop_after_choice(tmp_path, monkeypatch):
+    m, clock = _nudge_env(tmp_path, monkeypatch, (10, 0))
+    m.slots(client_id="p")
+    clock["now"] = t(10, 30)
+    assert m.nudge_endpoint("p", "30m")["ok"] == 1
+    clock["now"] = t(10, 40)
+    m.resolve_endpoint(text="Сегодня 14:00 по МСК", ts=None, client_id="p")
+    for hh, step in [(11, "1h"), (12, "2h")]:
+        clock["now"] = t(hh, 0)
+        assert m.nudge_endpoint("p", step)["ok"] == 0
+
+
+def test_nudges_skip_if_already_registered_for_future(tmp_path, monkeypatch):
+    m, clock = _nudge_env(tmp_path, monkeypatch, (9, 0))
+    m.resolve_endpoint(text="Сегодня 19:00 по МСК", ts=None, client_id="q")
+    clock["now"] = t(10, 0)
+    m.slots(client_id="q")                                   # снова нажал /start
+    clock["now"] = t(10, 30)
+    assert m.nudge_endpoint("q", "30m")["ok"] == 0
+
+
+def test_old_timers_ignored_after_restart(tmp_path, monkeypatch):
+    m, clock = _nudge_env(tmp_path, monkeypatch, (10, 0))
+    m.slots(client_id="r")
+    clock["now"] = t(10, 45)
+    m.slots(client_id="r")                                   # /start ещё раз
+    clock["now"] = t(11, 0)
+    assert m.nudge_endpoint("r", "1h")["ok"] == 0             # старый 1ч (через 15 мин после нового старта)
+    clock["now"] = t(12, 0)
+    assert m.nudge_endpoint("r", "2h")["ok"] == 0             # старый 2ч (через 1ч15)
+    clock["now"] = t(11, 15)
+    assert m.nudge_endpoint("r", "30m")["ok"] == 1
+    clock["now"] = t(11, 45)
+    assert m.nudge_endpoint("r", "1h")["ok"] == 1
+    clock["now"] = t(12, 45)
+    assert m.nudge_endpoint("r", "2h")["ok"] == 1
