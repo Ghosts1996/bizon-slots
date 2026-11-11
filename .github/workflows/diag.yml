@@ -64,6 +64,13 @@ jobs:
                 except Exception as e:
                     print("  META ERR", e)
             PY
+            echo "== live"
+            curl -fsS "http://127.0.0.1:8088/slots?client_id=diag_probe" | cut -c1-300; echo
+            curl -fsS "http://127.0.0.1:8088/nudge?client_id=diag_probe&step=30m"; echo
+            curl -fsS "http://127.0.0.1:8088/nudge?client_id=diag_probe&step=1h"; echo
+            curl -fsS "http://127.0.0.1:8088/due?client_id=diag_probe&step=link&name=Test"; echo
+            venv/bin/python -c "from app.main import room_link; print(room_link('123','Анна Петрова')); print(room_link('123','#{name}'))"
+            venv/bin/python -c "import sqlite3;c=sqlite3.connect('/opt/bizon-slots/data.db');c.execute(\"delete from starts where client_id='diag_probe'\");c.commit()"
             echo "== journal"
             journalctl -u bizon-slots --since "$(date -d '-10 hours' '+%F %T')" --no-pager | grep -oE '"GET /(started|nudge|visited|resolve|due)[^"]*" [0-9]+' | tail -150
         env:
