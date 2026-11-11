@@ -278,3 +278,41 @@ def test_nudge_without_started_call(tmp_path, monkeypatch):
     m.resolve_endpoint(text="Сегодня 14:00 по МСК", ts=None, client_id="d")
     assert m.nudge_endpoint("d", "day")["ok"] == 0
     assert m.nudge_endpoint("e", "day")["ok"] == 1
+
+
+def _viewers_api(viewers):
+    def get(path, params):
+        if path.endswith("getlist"):
+            return {"list": [{"webinarId": params.get("webinarId") or "209601:avtoweb*2026-11-11T16:00:00"}]}
+        return {"viewers": viewers, "total": len(viewers)}
+    return get
+
+
+def test_untagged_viewer_no_false_miss(tmp_path, monkeypatch):
+    """11.11: зритель зашёл без salebot= (ввёл имя вручную) - «не видели вас» не шлём."""
+    import app.main as m
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setattr(m, "now_msk", lambda: datetime(2026, 11, 11, 17, 30, tzinfo=MSK))
+    monkeypatch.setattr(m, "bizon_get", _viewers_api(
+        [{"view": 1, "viewTill": 3_000_000, "username": "тест", "np": True,
+          "webinarId": "209601:avtoweb*2026-11-11T16:00:00"}]))
+    r = m.check_visit("c1", int(datetime(2026, 11, 11, 16, tzinfo=MSK).timestamp()))
+    assert r["ready"] == 1 and r["unsure"] == 1 and r["again"] == 0 and r["record"] == 0
+
+
+def test_tagged_others_still_miss(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setattr(m, "now_msk", lambda: datetime(2026, 11, 11, 17, 30, tzinfo=MSK))
+    monkeypatch.setattr(m, "bizon_get", _viewers_api(
+        [{"url": "https://start.bizon365.ru/room/209601/avtoweb?salebot=other", "view": 1, "viewTill": 2}]))
+    r = m.check_visit("c1", int(datetime(2026, 11, 11, 16, tzinfo=MSK).timestamp()))
+    assert r["unsure"] == 0 and r["visited"] == 0 and r["again"] == 1
+
+
+def test_room_link_has_client_id(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setattr(m, "now_msk", lambda: datetime(2026, 11, 11, 15, 34, tzinfo=MSK))
+    r = m.resolve_endpoint(text="Сегодня 16:00 по МСК", ts=None, client_id="1060306770")
+    assert r["room_link"].endswith("?salebot=1060306770")

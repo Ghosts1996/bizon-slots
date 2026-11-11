@@ -173,6 +173,7 @@ def resolve_endpoint(text: str = Query(None, description="Текст нажат�
     r = resolve_ts(ts, now) if ts else resolve(text or "", now)
     if client_id and r.get("valid"):
         save_registration(client_id, int(r["ts"]), int(now.timestamp()))
+        r["room_link"] = room_link(client_id)  # room_url не трогаем: в блоках Сейлбота к нему уже могут дописывать ?salebot=
     return r
 
 
@@ -203,6 +204,15 @@ def session_viewers(webinar_id: str) -> list:
             return viewers
 
 
+def is_tagged(v: dict) -> bool:
+    return "salebot=" in json.dumps(v, ensure_ascii=False) or bool(v.get("salebot"))
+
+
+def room_link(client_id: str = "") -> str:
+    room = os.getenv("ROOM_URL", "https://start.bizon365.ru/room/209601/avtoweb")
+    return f"{room}?salebot={urllib.parse.quote(str(client_id))}" if client_id else room
+
+
 def check_visit(client_id: str, ts: int) -> dict:
     start = datetime.fromtimestamp(int(ts), MSK)
     webinar_id = f"{ROOM_ID}*{start:%Y-%m-%dT%H:%M:00}"
@@ -220,12 +230,19 @@ def check_visit(client_id: str, ts: int) -> dict:
                or str(v.get("salebot") or "") == str(client_id)]
         minutes = round(sum(watched_minutes(v) for v in hit), 1)
         seg = segment(bool(hit), minutes)
+        # В комнате были люди без метки salebot= (зашли не по ссылке из бота и
+        # ввели имя вручную) - среди них может быть и наш клиент. Не пишем ему
+        # «мы вас не видели», пока не можем это утверждать.
+        if not hit and any(not is_tagged(v) for v in viewers):
+            return {**NO_FOLLOWUP, "ready": 1, "visited": 0, "unsure": 1,
+                    "webinar_id": webinar_id, "minutes": 0, "segment": "none",
+                    "seg_early": 0, "seg_left": 0, "seg_full": 0}
         save_visit(client_id, int(ts), int(bool(hit)), minutes, seg)
         return {**NO_FOLLOWUP, **followup(client_id, bool(hit)),
                 "ready": 1, "visited": int(bool(hit)), "webinar_id": webinar_id,
                 "minutes": minutes, "segment": seg,
                 "seg_early": int(seg == "early"), "seg_left": int(seg == "left"),
-                "seg_full": int(seg == "full")}
+                "seg_full": int(seg == "full"), "unsure": 0}
     except Exception as e:  # сеть/токен - бот получит ready=0 и проверит позже
         return {**NO_FOLLOWUP, "ready": 0, "visited": 0, "webinar_id": webinar_id,
                 "error": str(e)[:200]}
@@ -340,7 +357,7 @@ def due_endpoint(client_id: str = Query(...), step: str = Query(..., pattern="^(
     now = now_msk()
     ts = claim_step(client_id, step, int(now.timestamp()))
     if ts is None:
-        return {"ok": 0, "text": ""}
+        return {"ok": 0, "text": "", "url": ""}
     if step == "record":
         # текст и ссылка на запись живут в блоке Сейлбота, чтобы их можно было править без меня
         return {"ok": 1, "text": ""}
@@ -348,7 +365,7 @@ def due_endpoint(client_id: str = Query(...), step: str = Query(..., pattern="^(
     left = ts - int(now.timestamp())
     head = "Через час встречаемся!" if left > 50 * 60 else "Совсем скоро начинаем!"
     text = HOUR_TEXT.format(head=head, time=f"{s:%H:%M}") if step == "hour" else LINK_TEXT
-    return {"ok": 1, "text": text, "time": f"{s:%H:%M}"}
+    return {"ok": 1, "text": text, "time": f"{s:%H:%M}", "url": room_link(client_id)}
 
 # --- Дожим тех, кто запустил бота, но не выбрал время ------------------------
 #
