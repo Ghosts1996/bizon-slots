@@ -1,0 +1,62 @@
+name: diag
+
+# Только чтение: состояние базы и отчёт Бизона по сеансам за день, логи вызовов.
+on:
+  workflow_dispatch:
+    inputs:
+      day:
+        default: ""
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          password: ${{ secrets.VDS_PASSWORD }}
+          envs: DAY
+          command_timeout: 5m
+          script: |
+            cd /opt/bizon-slots
+            set -a; . ./.env; set +a
+            venv/bin/python - <<'PY'
+            import json, os
+            from datetime import datetime, timedelta
+            from app.main import db, MSK, SLOTS, at, session_viewers, bizon_get, ROOM_ID
+            day = datetime.strptime(os.environ["DAY"], "%Y-%m-%d").replace(tzinfo=MSK) if os.environ.get("DAY") else datetime.now(MSK)
+            con = db()
+            f = lambda t: datetime.fromtimestamp(t, MSK).strftime("%d.%m %H:%M:%S") if t else "-"
+            lo = int(at(day, 0).timestamp()); hi = lo + 86400
+            print("== starts today")
+            for c, s in con.execute("select * from starts where started_at >= ? order by started_at", (lo,)):
+                print("START", c, f(s))
+            print("== reg_log today")
+            for c, ts, ra in con.execute("select * from reg_log where reg_at >= ? order by reg_at", (lo,)):
+                print("REG", c, "slot", f(ts), "at", f(ra))
+            print("== sent today")
+            for c, ts, st in con.execute("select * from sent where ts >= ? - 86400 order by ts", (lo,)):
+                print("SENT", c, f(ts), st)
+            print("== visits")
+            for row in con.execute("select * from visits where ts >= ? and ts < ? order by ts", (lo, hi)):
+                print("VISIT", row[0], f(row[1]), row[2:])
+            lst = bizon_get("webinars/reports/getlist", {"skip": 0, "limit": 50, "type": "AutoWebinars"})
+            print("== bizon list", [(w.get("webinarId"), w.get("created")) for w in (lst.get("list") or [])][:15])
+            for h in SLOTS:
+                s = at(day, h)
+                if s > datetime.now(MSK): continue
+                wid = f"{ROOM_ID}*{s:%Y-%m-%dT%H:%M:00}"
+                try:
+                    vs = session_viewers(wid)
+                except Exception as e:
+                    print("VIEWERS", wid, "ERR", e); continue
+                print("== VIEWERS", wid, len(vs))
+                for v in vs:
+                    v2 = {k: v.get(k) for k in v if k not in ("vi", "messages")}
+                    print("  V", json.dumps(v2, ensure_ascii=False)[:600])
+            PY
+            echo "== journal"
+            journalctl -u bizon-slots --since "$(date -d '-10 hours' '+%F %T')" --no-pager | grep -oE '"GET /(started|nudge|visited|resolve|due)[^"]*" [0-9]+' | tail -150
+        env:
+          DAY: ${{ inputs.day }}
