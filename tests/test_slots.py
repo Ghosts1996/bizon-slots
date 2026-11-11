@@ -316,3 +316,16 @@ def test_room_link_has_client_id(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "now_msk", lambda: datetime(2026, 11, 11, 15, 34, tzinfo=MSK))
     r = m.resolve_endpoint(text="Сегодня 16:00 по МСК", ts=None, client_id="1060306770")
     assert r["room_link"].endswith("?salebot=1060306770")
+
+
+def test_slots_with_client_marks_start(tmp_path, monkeypatch):
+    """Приветствие вызывает /slots?client_id=... - это старт для дожима через 30 минут."""
+    import app.main as m
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    clock = {"now": datetime(2026, 11, 11, 15, 36, tzinfo=MSK)}
+    monkeypatch.setattr(m, "now_msk", lambda: clock["now"])
+    m.slots(client_id="k1")
+    clock["now"] = datetime(2026, 11, 11, 16, 6, tzinfo=MSK)
+    assert m.nudge_endpoint(client_id="k1", step="30m")["ok"] == 1
+    assert m.nudge_endpoint(client_id="k1", step="30m")["ok"] == 0   # только один раз
+    assert m.slots()["b1"]                                            # без client_id как раньше

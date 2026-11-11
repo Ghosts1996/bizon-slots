@@ -155,8 +155,11 @@ def health():
 
 
 @app.get("/slots")
-def slots():
-    return build(now_msk())
+def slots(client_id: str = Query(None, description="client_id из Сейлбота: отметка приветствия для дожима")):
+    now = now_msk()
+    if client_id:
+        save_start(client_id, int(now.timestamp()))
+    return build(now)
 
 
 def resolve_ts(ts: int, now: datetime) -> dict:
