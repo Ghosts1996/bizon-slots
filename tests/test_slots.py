@@ -388,3 +388,26 @@ def test_old_timers_ignored_after_restart(tmp_path, monkeypatch):
     assert m.nudge_endpoint("r", "1h")["ok"] == 1
     clock["now"] = t(12, 45)
     assert m.nudge_endpoint("r", "2h")["ok"] == 1
+
+
+def test_visit_exact_client_id(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setattr(m, "now_msk", lambda: t(16))
+    wid = f"{m.ROOM_ID}*2026-10-30T14:00:00"
+    viewer = {"url": "https://start.bizon365.ru/room/209601/avtoweb?salebot=123", "vi": [{"s": 0, "e": 600}]}
+    monkeypatch.setattr(m, "bizon_get", lambda path, params: {"list": [{"webinarId": wid}], "viewers": [viewer], "total": 1})
+    ts = int(t(14).timestamp())
+    assert m.check_visit("123", ts)["visited"] == 1
+    assert m.check_visit("12", ts)["visited"] == 0      # 12 - префикс 123, но не тот человек
+
+
+def test_visit_unsure_is_not_a_miss(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setattr(m, "now_msk", lambda: t(16))
+    wid = f"{m.ROOM_ID}*2026-10-30T14:00:00"
+    viewer = {"url": "https://start.bizon365.ru/room/209601/avtoweb", "vi": [{"s": 0, "e": 600}]}
+    monkeypatch.setattr(m, "bizon_get", lambda path, params: {"list": [{"webinarId": wid}], "viewers": [viewer], "total": 1})
+    r = m.check_visit("555", int(t(14).timestamp()))
+    assert r["visited"] == -1 and r["again"] == 0 and r["record"] == 0

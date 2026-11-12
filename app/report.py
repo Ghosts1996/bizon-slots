@@ -23,7 +23,7 @@ import urllib.request
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 
-from app.main import MSK, ROOM_ID, SLOTS, at, bizon_get, db, segment, session_viewers, watched_minutes
+from app.main import MSK, ROOM_ID, SLOTS, at, bizon_get, db, segment, session_viewers, viewer_ids, watched_minutes
 
 STATE_DIR = os.getenv("STATE_DIR", "/opt/bizon-slots")
 SEG = [("full", "🟢", "досмотрели до конца"),
@@ -60,7 +60,7 @@ def sync_visits(con, start: datetime, ts: int, regs: set) -> None:
         return  # отчёт ещё не готов
     blobs = [(json.dumps(v, ensure_ascii=False), v) for v in viewers]
     for cid in todo:
-        hit = [v for b, v in blobs if f"salebot={cid}" in b]
+        hit = [v for b, v in blobs if str(cid) in viewer_ids(v)]
         mins = round(sum(watched_minutes(v) for v in hit), 1)
         con.execute("insert or replace into visits values (?, ?, ?, ?, ?)",
                     (cid, ts, int(bool(hit)), mins, segment(bool(hit), mins)))

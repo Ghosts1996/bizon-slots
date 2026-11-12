@@ -208,6 +208,17 @@ def session_viewers(webinar_id: str) -> list:
             return viewers
 
 
+_SB_RE = re.compile(r"salebot=(\d+)")
+
+
+def viewer_ids(v: dict) -> set:
+    """Все client_id из меток salebot=<id> у зрителя (url, ref, поля отчёта)."""
+    ids = set(_SB_RE.findall(json.dumps(v, ensure_ascii=False)))
+    if v.get("salebot"):
+        ids.add(str(v["salebot"]).strip())
+    return ids
+
+
 def is_tagged(v: dict) -> bool:
     return "salebot=" in json.dumps(v, ensure_ascii=False) or bool(v.get("salebot"))
 
@@ -240,17 +251,14 @@ def check_visit(client_id: str, ts: int) -> dict:
         # давно закончился, а отчёта нет - значит, в комнате не было никого.
         if not ready and not viewers and now_msk() < start + timedelta(minutes=EMPTY_AFTER_MIN):
             return {**NO_FOLLOWUP, "ready": 0, "visited": 0, "webinar_id": webinar_id}
-        needle = f"salebot={client_id}"
-        hit = [v for v in viewers
-               if needle in json.dumps(v, ensure_ascii=False)
-               or str(v.get("salebot") or "") == str(client_id)]
+        hit = [v for v in viewers if str(client_id) in viewer_ids(v)]
         minutes = round(sum(watched_minutes(v) for v in hit), 1)
         seg = segment(bool(hit), minutes)
         # В комнате были люди без метки salebot= (зашли не по ссылке из бота и
         # ввели имя вручную) - среди них может быть и наш клиент. Не пишем ему
         # «мы вас не видели», пока не можем это утверждать.
         if not hit and any(not is_tagged(v) for v in viewers):
-            return {**NO_FOLLOWUP, "ready": 1, "visited": 0, "unsure": 1,
+            return {**NO_FOLLOWUP, "ready": 1, "visited": -1, "unsure": 1,
                     "webinar_id": webinar_id, "minutes": 0, "segment": "none",
                     "seg_early": 0, "seg_left": 0, "seg_full": 0}
         save_visit(client_id, int(ts), int(bool(hit)), minutes, seg)
